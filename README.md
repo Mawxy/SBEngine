@@ -159,3 +159,5 @@ Same recipe as Stockfish's NNUE: generate positions by self-play, label them, tr
 - [x] First training run (36 h): NNUE, info network and bidding promoted; NNUE flat after generation 1
 - [ ] Round 2 recipe (horizon-position NNUE, 256-64 info network, cleaner self-play): `desktop/Start-Training-Round2.bat`, see `desktop/TRAINING.md`
 - [ ] Bake the trained models into the browser version
+#   S B E n g i n e  
+ 
