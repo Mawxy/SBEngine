@@ -1,0 +1,1137 @@
+<title>Spectacular Bid Engine</title>
+<meta name="description" content="Live analysis board for Spectacular Bid dominoes">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bitter:ital,wght@0,500;0,700;1,600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@400;500;600&display=swap">
+<style>
+/* Layout: a racing-silks scoreboard on top, the felt table and your rack on the left,
+   the engine's read and the hand log on the right; stacks to one column on phones. */
+:root {
+  --bg: #eef0f4;
+  --ink: #142039;
+  --muted: #5b6680;
+  --panel: #ffffff;
+  --panel-2: #f6f7fa;
+  --line: #d5dae4;
+  --seat1: #1f3a68;          /* blue chips */
+  --seat2: #b3262e;          /* red chips */
+  --seat1-soft: #dfe7f5;
+  --seat2-soft: #f7e0e1;
+  --felt: #18304f;
+  --felt-2: #22436b;
+  --felt-ink: #dfe8f5;
+  --felt-muted: #9fb4cf;
+  --ivory: #f8f4e9;
+  --ivory-edge: #bdb39a;
+  --pip: #171717;
+  --good: #22744a;
+  --good-soft: #dcefe4;
+  --bad: #a3323a;
+  --focus: #e0a526;
+  --f-display: "Bitter", Georgia, "Times New Roman", serif;
+  --f-body: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0c1220; --ink: #e4e8f1; --muted: #93a0b9; --panel: #141d30; --panel-2: #19243a; --line: #273450;
+    --seat1: #86a8e6; --seat2: #ee7a7f; --seat1-soft: #1c2d4d; --seat2-soft: #3a1d24;
+    --felt: #0e1c31; --felt-2: #17304f; --felt-ink: #dfe8f5; --felt-muted: #8ea4c2;
+    --good: #5cc48a; --good-soft: #163526; --bad: #ef7d84; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0c1220; --ink: #e4e8f1; --muted: #93a0b9; --panel: #141d30; --panel-2: #19243a; --line: #273450;
+  --seat1: #86a8e6; --seat2: #ee7a7f; --seat1-soft: #1c2d4d; --seat2-soft: #3a1d24;
+  --felt: #0e1c31; --felt-2: #17304f; --felt-ink: #dfe8f5; --felt-muted: #8ea4c2;
+  --good: #5cc48a; --good-soft: #163526; --bad: #ef7d84; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { background: var(--bg); }
+body { color: var(--ink); font-family: var(--f-body); font-size: 15px; line-height: 1.45; }
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.mono { font-family: var(--f-mono); }
+.num { font-variant-numeric: tabular-nums; }
+
+.app {
+  max-width: 1280px; margin: 0 auto; padding-inline: 16px; padding-block: 14px 40px;
+  display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr) 340px;
+  grid-template-areas: "top top" "main side";
+}
+@media (max-width: 920px) {
+  .app { grid-template-columns: minmax(0, 1fr); grid-template-areas: "top" "main" "side"; }
+}
+@media (max-width: 520px) {
+  .seats { width: 100%; display: grid; grid-template-columns: 1fr 1fr; }
+  .chips { grid-template-columns: repeat(10, 6px); }
+  .chips i { width: 6px; height: 6px; }
+  .board { min-height: 200px; }
+}
+.top { grid-area: top; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+.main { grid-area: main; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.side { grid-area: side; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+/* Brand */
+.brand { display: flex; align-items: baseline; gap: 6px; margin-right: auto; }
+.brand h1 { margin: 0; font-family: var(--f-display); font-weight: 700; font-size: 1.55rem; letter-spacing: -0.01em; color: var(--seat1); }
+.brand h1 em { font-style: italic; font-weight: 600; color: var(--seat2); }
+.brand .tag { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+
+/* Seat cards with chip pools */
+.seats { display: flex; flex-wrap: wrap; gap: 10px; }
+.seat { display: grid; gap: 4px; padding: 8px 12px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); min-width: 0; }
+.seat.to-move { box-shadow: inset 0 0 0 2px var(--c); }
+.seat .who { display: flex; align-items: baseline; gap: 8px; font-size: 0.82rem; color: var(--muted); }
+.seat .who b { color: var(--c); font-weight: 600; font-size: 0.95rem; }
+.seat .pool { display: flex; align-items: center; gap: 8px; }
+.seat .pool .n { font-family: var(--f-display); font-weight: 700; font-size: 1.35rem; color: var(--ink); min-width: 2ch; text-align: right; }
+.chips { display: grid; grid-template-columns: repeat(15, 7px); gap: 2px; }
+.chips i { width: 7px; height: 7px; border-radius: 50%; background: var(--c); }
+.chips i.gone { background: transparent; box-shadow: inset 0 0 0 1px var(--line); }
+.badge { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; background: var(--c-soft); color: var(--c); }
+.meta { display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 0.85rem; }
+.meta b { color: var(--ink); font-weight: 600; }
+
+/* Board */
+.board { position: relative; border-radius: 14px; align-content: center; background: radial-gradient(120% 90% at 50% 40%, var(--felt-2), var(--felt)); color: var(--felt-ink); padding: 44px 12px 14px; min-height: 280px; display: grid; }
+.board-hud { position: absolute; inset: 10px 14px auto; display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 0.82rem; color: var(--felt-muted); pointer-events: none; }
+.board-hud b { color: var(--felt-ink); font-weight: 600; }
+.board-hud .count b { font-family: var(--f-display); font-size: 1.05rem; }
+.board-hud .scores { color: #f2c75c; font-weight: 600; }
+.board-scroll { overflow-x: auto; display: grid; place-items: center; min-width: 0; }
+.board svg { display: block; max-height: 62vh; }
+.tile-face { fill: var(--ivory); stroke: var(--ivory-edge); stroke-width: 1; }
+.tile-div { stroke: var(--ivory-edge); stroke-width: 1.2; }
+.pip { fill: var(--pip); }
+.tile.last .tile-face { stroke: #f2c75c; stroke-width: 2.5; }
+.slot rect { fill: rgba(255,255,255,0.04); stroke: rgba(223,232,245,0.35); stroke-dasharray: 4 4; }
+.slot text { fill: var(--felt-muted); font-family: var(--f-mono); font-size: 12px; text-anchor: middle; dominant-baseline: central; }
+.slot.live { cursor: pointer; }
+.slot.live rect { fill: rgba(242,199,92,0.18); stroke: #f2c75c; stroke-dasharray: none; stroke-width: 2; }
+.slot.live text { fill: #f8e3a8; font-weight: 500; }
+.slot.live:hover rect, .slot.live:focus rect { fill: rgba(242,199,92,0.32); }
+
+/* Chess-style eval bar: Seat 1 (blue) fills from the bottom, Seat 2 (red) from the top */
+.board-row { display: flex; gap: 10px; align-items: stretch; min-width: 0; }
+.board-row .board { flex: 1; min-width: 0; }
+.vbar { position: relative; width: 34px; flex: none; border-radius: 8px; overflow: hidden; background: var(--seat2); border: 1px solid var(--line); }
+.vbar-fill { position: absolute; left: 0; right: 0; bottom: 0; background: var(--seat1); transition: height .35s ease; }
+.vbar-num { position: absolute; left: 0; right: 0; text-align: center; font-size: 0.64rem; letter-spacing: -0.02em; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--panel); }
+.vbar.s1 .vbar-num { bottom: 6px; } .vbar.s2 .vbar-num { top: 6px; }
+@media (prefers-reduced-motion: reduce) { .vbar-fill { transition: none; } }
+
+/* Rack */
+.rack-wrap { display: flex; flex-wrap: wrap; align-items: end; gap: 10px 16px; }
+.rack { display: flex; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.rack button { background: none; border: 0; padding: 0; border-radius: 7px; transition: transform .12s ease; }
+.rack button svg { width: 40px; height: 80px; display: block; }
+.rack button.legal { transform: translateY(-6px); }
+.rack button.legal .tile-face { stroke: var(--seat1); stroke-width: 2; }
+.rack button.dim { opacity: 0.45; }
+.rack button.pending .tile-face { stroke: #e0a526; stroke-width: 3; }
+.rack-label { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.rack-label b { color: var(--ink); text-transform: none; letter-spacing: 0; font-weight: 600; }
+
+/* Panels */
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: grid; gap: 12px; min-width: 0; }
+.panel h2 { margin: 0; font-family: var(--f-display); font-weight: 700; font-size: 1.08rem; text-wrap: balance; }
+.panel h2 small { font-family: var(--f-body); font-weight: 400; font-size: 0.85rem; color: var(--muted); margin-left: 6px; }
+.panel p { margin: 0; color: var(--muted); max-width: 62ch; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.btn { border: 1px solid var(--line); background: var(--panel-2); border-radius: 8px; padding: 7px 12px; font-weight: 500; }
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--seat1); border-color: var(--seat1); color: var(--panel); }
+.btn.red { background: var(--seat2); border-color: var(--seat2); color: var(--panel); }
+.btn.on { box-shadow: inset 0 0 0 2px var(--seat1); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn.small { padding: 4px 9px; font-size: 0.85rem; }
+.notice { padding: 8px 12px; border-radius: 8px; background: var(--seat2-soft); color: var(--ink); font-size: 0.9rem; }
+.notice.info { background: var(--seat1-soft); }
+.notation { display: flex; gap: 8px; }
+.notation input { flex: 1; min-width: 0; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); font-family: var(--f-mono); }
+.hint { font-size: 0.8rem; color: var(--muted); }
+.hint code, .mono-chip { font-family: var(--f-mono); font-size: 0.85em; background: var(--panel-2); border: 1px solid var(--line); border-radius: 5px; padding: 0 4px; }
+
+/* Tile picker: the double-six set laid out by high end */
+.picker { display: grid; gap: 6px; overflow-x: auto; }
+.picker .prow { display: flex; gap: 6px; }
+.picker button { background: none; border: 0; padding: 2px; border-radius: 6px; position: relative; }
+.picker button svg { width: 52px; height: 26px; display: block; }
+.picker button.sel { background: var(--seat1); }
+.picker button.sel .tile-face { stroke: var(--seat1); }
+.picker button.fits { background: var(--good-soft); }
+.picker button.excl svg { opacity: 0.5; }
+.picker button.excl::after { content: ""; position: absolute; left: 6px; right: 6px; top: 50%; border-top: 2px solid var(--bad); transform: rotate(-12deg); }
+.picker button:disabled { opacity: 0.18; cursor: default; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.8rem; color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+
+/* Bidding */
+.stepper { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.stepper button { border: 0; background: var(--panel-2); width: 34px; height: 34px; font-size: 1.1rem; }
+.stepper output { min-width: 3ch; text-align: center; font-family: var(--f-display); font-weight: 700; font-size: 1.15rem; }
+
+/* Engine */
+.evalhead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.evalnum { font-family: var(--f-display); font-weight: 700; font-size: 2rem; line-height: 1; font-variant-numeric: tabular-nums; }
+.evalnum.small { font-size: 1.1rem; }
+.evalbar + .evalscale + .evalbar { margin-top: 4px; }
+.evalbar { position: relative; height: 10px; border-radius: 5px; background: var(--panel-2); border: 1px solid var(--line); overflow: hidden; }
+.evalbar span { position: absolute; top: 0; bottom: 0; }
+.evalbar::after { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; border-left: 1px solid var(--muted); }
+.evalscale { display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.moves { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.moves td { padding: 5px 4px; border-top: 1px solid var(--line); }
+.moves tr:first-child td { border-top: 0; }
+.moves td.n { font-family: var(--f-mono); font-weight: 500; }
+.moves td.v { text-align: right; width: 6ch; }
+.moves td.se { text-align: right; color: var(--muted); font-size: 0.8rem; width: 6ch; }
+.moves td.bar { width: 40%; }
+.moves td.bar span { display: block; height: 6px; border-radius: 3px; background: var(--seat1); opacity: 0.75; }
+.moves tr.best td.n { color: var(--good); }
+.moves tr.click { cursor: pointer; }
+.moves tr.click:hover td { background: var(--panel-2); }
+.levels { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.levels button { border: 0; background: transparent; padding: 4px 10px; font-size: 0.82rem; }
+.levels button.on { background: var(--seat1); color: var(--panel); }
+.stats { font-size: 0.76rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.thinking { display: inline-flex; align-items: center; gap: 6px; font-size: 0.82rem; color: var(--muted); }
+.thinking i { width: 8px; height: 8px; border-radius: 50%; background: var(--seat1); animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .thinking i { animation: none; } .rack button { transition: none; } }
+
+/* History */
+.hand-log { display: grid; gap: 4px; }
+.hand-log h3 { margin: 6px 0 0; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+.mv { display: flex; flex-wrap: wrap; gap: 4px; }
+.mv span { font-family: var(--f-mono); font-size: 0.82rem; padding: 1px 6px; border-radius: 5px; border-left: 3px solid var(--c); background: var(--panel-2); }
+.mv span em { font-style: normal; color: var(--good); font-weight: 500; margin-left: 3px; }
+.endline { font-size: 0.82rem; color: var(--muted); }
+.arena-rack { display: grid; gap: 6px; }
+.arena-rack .rtile svg { width: 34px; height: 68px; display: block; }
+h3.sub { margin: 4px 0 0; font-size: 0.95rem; }
+.choice { display: grid; gap: 8px; padding: 12px; border-radius: 10px; background: var(--panel-2); }
+.choice h3 { margin: 0; font-size: 0.98rem; font-weight: 600; }
+.reveal { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.reveal svg { width: 44px; height: 22px; }
+textarea.record { width: 100%; min-height: 140px; font-family: var(--f-mono); font-size: 0.8rem; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); padding: 8px; }
+</style>
+
+<div class="app" id="app">
+  <header class="top">
+    <div class="brand"><h1>Spectacular <em>Bid</em></h1><span class="tag">Engine</span></div>
+    <div class="seats" id="seats"></div>
+    <div class="meta" id="meta"></div>
+  </header>
+  <section class="main">
+    <div class="board-row">
+      <div class="vbar" id="vbar" hidden role="img" aria-label="Evaluation bar"><div class="vbar-fill" id="vbar-fill"></div><span class="vbar-num" id="vbar-num"></span></div>
+      <div class="board" id="board"><div class="board-hud" id="hud"></div><div class="board-scroll" id="boardsvg"></div></div>
+    </div>
+    <div class="rack-wrap" id="rackwrap"></div>
+    <div class="panel" id="actions"></div>
+  </section>
+  <aside class="side">
+    <div class="panel" id="engine"></div>
+    <div class="panel" id="history"></div>
+  </aside>
+</div>
+
+<script id="havi-pack" type="text/plain">__HAVI_PACK__</script>
+<script>
+const WASM_B64 = "__WASM_B64__";
+
+// ------------------------------------------------------------ engine glue
+async function makeEngine(mod) {
+  let inst;
+  const mem = () => new DataView(inst.exports.memory.buffer);
+  const wasi = {
+    fd_write: (fd, iovs, n, nw) => { mem().setUint32(nw, 0, true); return 0; },
+    fd_close: () => 0, fd_seek: () => 0, fd_fdstat_get: () => 8,
+    fd_prestat_get: () => 8, fd_prestat_dir_name: () => 8,
+    proc_exit: (c) => { throw new Error("engine exited " + c); },
+    environ_sizes_get: (a, b) => { mem().setUint32(a, 0, true); mem().setUint32(b, 0, true); return 0; },
+    environ_get: () => 0,
+  };
+  const imports = { wasi_snapshot_preview1: new Proxy(wasi, { get: (t, k) => (k in t ? t[k] : () => 52) }) };
+  inst = await WebAssembly.instantiate(mod, imports);
+  if (inst.exports._initialize) inst.exports._initialize();
+  const enc = new TextEncoder(), dec = new TextDecoder();
+  return {
+    cmd(s) {
+      const b = enc.encode(s + "\0");
+      const p = inst.exports.sb_alloc(b.length);
+      new Uint8Array(inst.exports.memory.buffer, p, b.length).set(b);
+      const r = inst.exports.sb_command(p);
+      inst.exports.sb_free(p);
+      const u = new Uint8Array(inst.exports.memory.buffer);
+      let e = r; while (u[e]) e++;
+      return JSON.parse(dec.decode(u.subarray(r, e)));
+    },
+  };
+}
+
+const HAVI_PACK = document.getElementById("havi-pack").textContent;
+const WORKER_SRC = `
+${makeEngine.toString()}
+${HAVI_PACK}
+// current: HaviEngine 5d092f9 (2026-10-12). shipped / fixed: the older 3a45a1c bot.
+const HAVI = { current: [HaviCurrent, AdapterNew], shipped: [HaviShipped, AdapterOld], fixed: [HaviFixed, AdapterOld] };
+AdapterNew.haviInit(HaviCurrent);  // match equity table: the baseline its GameRoom falls back to
+function haviChoose(v, st, opts) { const [H, A] = HAVI[v] || HAVI.current; return A.haviChoose(H, st, opts); }
+let modReady;
+onmessage = async (e) => {
+  const m = e.data;
+  if (m.type === "init") { modReady = WebAssembly.compile(m.bytes); await modReady; return; }
+  if (m.type === "run") {
+    const mod = await modReady;
+    for (let i = 0; i < m.cmds.length; i++) {
+      const eng = await makeEngine(mod);
+      for (const c of m.log) eng.cmd(c);
+      const t0 = performance.now();
+      const r = eng.cmd(m.cmds[i]);
+      r.ms = Math.round(performance.now() - t0);
+      postMessage({ type: "result", id: m.id, final: i === m.cmds.length - 1, r });
+    }
+  }
+  if (m.type === "havi") {
+    const mod = await modReady;
+    const eng = await makeEngine(mod);
+    for (const c of m.log) eng.cmd(c);
+    const t0 = performance.now();
+    const move = haviChoose(m.version, eng.cmd("state " + m.seat), { limitMs: m.limitMs });
+    postMessage({ type: "result", id: m.id, final: true, r: { ok: true, move, ms: Math.round(performance.now() - t0) } });
+  }
+  if (m.type === "series") {
+    const mod = await modReady;
+    for (let g = 0; g < m.games; g++) {
+      const eng = await makeEngine(mod);
+      const ourSeat = g % 2 === 0 ? 1 : 2;
+      let S = eng.cmd("arena " + (m.seed + g)), start = [30, 30], nets = [], moves = 0;
+      const clog = ["arena " + (m.seed + g)];
+      const net = () => (S.pools[ourSeat - 1] - start[ourSeat - 1]) - (S.pools[2 - ourSeat] - start[2 - ourSeat]);
+      while (S.phase !== "gameover") {
+        if (S.phase === "handover") { nets.push(net()); start = S.pools.slice(); S = eng.cmd("next"); clog.push("next"); continue; }
+        const who = S.toMove;
+        const choice = "botchoice " + m.dets + " " + m.nodes + " " + (g * 1000 + moves);
+        let mv;
+        if (who !== ourSeat) mv = haviChoose(m.version, eng.cmd("state " + who), { limitMs: m.limitMs });
+        else if (m.api) {
+          // Desktop app: the native engine with the trained models plays our side.
+          let r;
+          try { r = await (await fetch(m.api, { method: "POST", body: [choice, ...clog].join(String.fromCharCode(10)) })).json(); }
+          catch (err) { postMessage({ type: "series", id: m.id, error: "Lost contact with the engine. Restart the app." }); return; }
+          if (!r.ok) { postMessage({ type: "series", id: m.id, error: r.error || "engine error" }); return; }
+          mv = r.move;
+        } else mv = eng.cmd(choice).move;
+        const n = eng.cmd("move " + mv);
+        clog.push("move " + mv);
+        if (!n.ok) { postMessage({ type: "series", id: m.id, error: "Seat " + who + " made an illegal move: " + mv }); return; }
+        S = n; moves++;
+      }
+      nets.push(net());
+      postMessage({ type: "series", id: m.id, game: { n: g + 1, ourSeat, won: S.winner === ourSeat, hands: S.handNumber, pools: S.pools, nets } });
+    }
+    postMessage({ type: "series", id: m.id, done: true });
+  }
+};`;
+
+// ------------------------------------------------------------ app state
+// The desktop app serves this page with window.SB_NATIVE set; heavy searches then
+// go to the native engine over a local connection instead of the in-page worker.
+const NATIVE = !!window.SB_NATIVE;
+const LEVELS = NATIVE ? {
+  quick: { dets: 32, nodes: 8000, label: "Quick" },
+  standard: { dets: 64, nodes: 30000, label: "Standard" },
+  deep: { dets: 160, nodes: 100000, label: "Deep" },
+} : {
+  quick: { dets: 16, nodes: 4000, label: "Quick" },
+  standard: { dets: 32, nodes: 20000, label: "Standard" },
+  deep: { dets: 96, nodes: 60000, label: "Deep" },
+};
+const EXAMPLE_LOG = ["new 1", "hand 66 65 10 20 30 40 50 lead 1", "move 66", "move d", "move d", "move 62"];
+const STORE_KEY = "sb-engine-v1";
+
+let wasmBytes, wasmModule, engine, worker = null, workerBusy = false, jobId = 0, botTimer = null;
+let log = [], S = null;
+const ui = {
+  example: false, dealing: false, choosingSeat: false, picker: null, pending: null,
+  sel: new Set(), leader: 0, bid: 3, level: "standard", analysis: null, error: "", info: "",
+  showRecord: false, revealSkipped: false, hints: false, botThinking: false,
+  arenaCfg: { ourSeat: 1, version: "current", haviRev: 2, haviMs: 1000, delay: 700 }, arenaPaused: false, thinkingSeat: 0,
+  series: null, seriesGames: 10, evalBar: false, barEval: null, barLabel: "",
+};
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const seatName = (seat) => (S && S.arena ? (seat === ui.arenaCfg.ourSeat ? "SB Engine" : "HaviEngine")
+  : S && seat === S.me ? "You" : S && S.match ? "Engine" : "Opponent");
+const oppName = () => (S && S.arena ? seatName(3 - S.me) : S && S.match ? "Engine" : "Opponent");
+const seatVar = (seat) => (seat === 1 ? "--seat1" : "--seat2");
+const prettyEnd = (e) => String(e || "").replace(/end domino (\d)/, (_, n) => `${seatName(+n)} went out`).replace("end blocked", "Blocked");
+const fmt = (x, d = 2) => (x >= 0 ? "+" : "−") + Math.abs(x).toFixed(d);
+
+function save() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify({ log, level: ui.level, example: ui.example, hints: ui.hints, arenaCfg: ui.arenaCfg, evalBar: ui.evalBar })); } catch (e) {}
+}
+function load() {
+  try { const v = JSON.parse(localStorage.getItem(STORE_KEY) || "null"); return v && Array.isArray(v.log) ? v : null; } catch (e) { return null; }
+}
+
+// ------------------------------------------------------------ tiles (SVG)
+const PIPS = {
+  0: [], 1: [[.5, .5]], 2: [[.25, .25], [.75, .75]], 3: [[.25, .25], [.5, .5], [.75, .75]],
+  4: [[.25, .25], [.75, .25], [.25, .75], [.75, .75]],
+  5: [[.25, .25], [.75, .25], [.5, .5], [.25, .75], [.75, .75]],
+  6: [[.27, .22], [.27, .5], [.27, .78], [.73, .22], [.73, .5], [.73, .78]],
+};
+function half(x, y, s, n, rot) {
+  return PIPS[n].map(([u, v]) => {
+    const [px, py] = rot ? [v, u] : [u, v];
+    return `<circle cx="${(x + px * s).toFixed(1)}" cy="${(y + py * s).toFixed(1)}" r="${(s * 0.088).toFixed(1)}" class="pip"/>`;
+  }).join("");
+}
+// orient "h": a on the left, b on the right. "v": a on top, b below.
+function tileSVG(x, y, a, b, orient, s = 32, cls = "") {
+  const w = orient === "h" ? 2 * s : s, h = orient === "h" ? s : 2 * s;
+  let g = `<g class="tile ${cls}"><rect x="${x + 1}" y="${y + 1}" width="${w - 2}" height="${h - 2}" rx="${s * 0.16}" class="tile-face"/>`;
+  if (orient === "h") g += `<line x1="${x + s}" y1="${y + s * 0.18}" x2="${x + s}" y2="${y + s * 0.82}" class="tile-div"/>` + half(x, y, s, a, true) + half(x + s, y, s, b, true);
+  else g += `<line x1="${x + s * 0.18}" y1="${y + s}" x2="${x + s * 0.82}" y2="${y + s}" class="tile-div"/>` + half(x, y, s, a, false) + half(x, y + s, s, b, false);
+  return g + "</g>";
+}
+const tileIcon = (code, orient = "h") => {
+  const a = +code[0], b = +code[1];
+  return orient === "h"
+    ? `<svg viewBox="0 0 64 32" aria-hidden="true">${tileSVG(0, 0, a, b, "h")}</svg>`
+    : `<svg viewBox="0 0 32 64" aria-hidden="true">${tileSVG(0, 0, a, b, "v")}</svg>`;
+};
+const ALL_TILES = [];
+for (let h = 0; h <= 6; h++) for (let l = 0; l <= h; l++) ALL_TILES.push(`${h}${l}`);
+const fitsPip = (code, pip) => +code[0] === pip || +code[1] === pip;
+
+// ------------------------------------------------------------ engine calls
+function lastTilePlayed() {
+  const h = S && S.history && S.history[S.history.length - 1];
+  if (!h) return null;
+  for (let i = h.moves.length - 1; i >= 0; i--) { const n = h.moves[i].n; if (/^\d\d/.test(n)) return n.slice(0, 2); }
+  return null;
+}
+
+async function rebuild() {
+  engine = await makeEngine(wasmModule);
+  let st = engine.cmd("state");
+  for (const c of log) { const r = engine.cmd(c); if (r.ok) st = r; }
+  S = st;
+}
+
+async function send(c) {
+  let r;
+  try { r = engine.cmd(c); }
+  catch (e) {
+    await rebuild();
+    ui.error = `The engine could not process "${c}". Nothing was changed.`;
+    render(); return false;
+  }
+  if (!r.ok) { ui.error = r.error; render(); return false; }
+  const w = c.trim().split(/\s+/)[0];
+  if (w === "new" || w === "match" || w === "arena") ui.example = false;
+  log = engine.cmd("log").log;
+  S = r;
+  ui.error = ""; ui.info = ""; ui.pending = null; ui.picker = null;
+  if (w === "hand" || w === "match" || w === "next") { ui.dealing = false; ui.sel.clear(); ui.revealSkipped = false; }
+  save(); render(); analyze();
+  return true;
+}
+
+// ------------------------------------------------------------ background engine jobs
+function startWorker() {
+  const url = URL.createObjectURL(new Blob([WORKER_SRC], { type: "text/javascript" }));
+  worker = new Worker(url);
+  worker.onmessage = (e) => {
+    const m = e.data;
+    if (m.type === "result" && m.id === jobId) { if (m.final) workerBusy = false; onJob(m.r, m.final); }
+  };
+  worker.onerror = () => { workerBusy = false; onJob({ ok: false, error: "The engine stopped unexpectedly." }, true); };
+  worker.postMessage({ type: "init", bytes: wasmBytes.buffer.slice(0) });
+}
+let onJob = () => {};
+// Run engine commands on a fresh copy of the game (worker, or the native engine in the desktop app).
+function runJob(cmds, handler) {
+  const id = ++jobId;
+  onJob = handler;
+  if (NATIVE) {
+    (async () => {
+      for (let i = 0; i < cmds.length; i++) {
+        try {
+          const t0 = performance.now();
+          const res = await fetch("/api/run", { method: "POST", body: cmds[i] + "\n" + log.join("\n") });
+          const r = await res.json();
+          r.ms = Math.round(performance.now() - t0);
+          if (id !== jobId) return;
+          handler(r, i === cmds.length - 1);
+        } catch (e) { if (id === jobId) handler({ ok: false, error: "Lost contact with the engine. Restart the app." }, true); return; }
+      }
+    })();
+    return;
+  }
+  if (workerBusy) { worker.terminate(); startWorker(); }
+  workerBusy = true;
+  worker.postMessage({ type: "run", id, log: log.slice(), cmds });
+}
+
+const haviLabel = (v) => ({ current: "current (5d092f9)", shipped: "old 3a45a1c, as shipped", fixed: "old 3a45a1c, sign fix" }[v] || v);
+function haviOptions() {
+  return `<div class="row"><span class="hint">HaviEngine</span>${[["current", "Current (Oct 12)"], ["shipped", "Old, as shipped"], ["fixed", "Old, sign fix"]].map(([v, l]) => `<button class="btn small ${ui.arenaCfg.version === v ? "on" : ""}" data-act="havi-version" data-v="${v}">${l}</button>`).join("")}</div>
+    <div class="row"><span class="hint">HaviEngine time per move</span>${[250, 1000, 3000].map((ms) => `<button class="btn small ${ui.arenaCfg.haviMs === ms ? "on" : ""}" data-act="havi-ms" data-ms="${ms}">${ms >= 1000 ? ms / 1000 + " s" : ms + " ms"}</button>`).join("")}</div>`;
+}
+
+// A series runs whole games headless in its own worker. In the browser our side is the WebAssembly
+// engine; in the desktop app our moves go to the native engine (with the trained models).
+let seriesWorker = null;
+function startSeries() {
+  stopSeries();
+  const url = URL.createObjectURL(new Blob([WORKER_SRC], { type: "text/javascript" }));
+  seriesWorker = new Worker(url);
+  seriesWorker.postMessage({ type: "init", bytes: wasmBytes.buffer.slice(0) });
+  const lv = LEVELS[ui.level];
+  ui.series = { games: [], total: ui.seriesGames, running: true, error: "", cfg: { level: lv.label, version: ui.arenaCfg.version, haviMs: ui.arenaCfg.haviMs }, t0: Date.now() };
+  seriesWorker.onmessage = (e) => {
+    const m = e.data;
+    if (m.type !== "series" || !ui.series) return;
+    if (m.error) { ui.series.error = m.error; ui.series.running = false; }
+    if (m.game) ui.series.games.push(m.game);
+    if (m.done) ui.series.running = false;
+    if (m.done || m.error) renderActions();  // flips Stop back to Run on the new-game screen
+    renderEngine();
+  };
+  seriesWorker.postMessage({ type: "series", id: 1, games: ui.seriesGames, dets: lv.dets, nodes: lv.nodes, version: ui.arenaCfg.version, limitMs: ui.arenaCfg.haviMs, seed: Math.floor(Math.random() * 1e9), api: NATIVE ? location.origin + "/api/run" : null });
+  renderEngine();
+}
+function stopSeries() {
+  if (seriesWorker) { seriesWorker.terminate(); seriesWorker = null; }
+  if (ui.series) ui.series.running = false;
+}
+function seriesHTML() {
+  let h = `<h3 class="sub">Series</h3><p class="hint">Whole games, no animation. Seats alternate every game. Uses the settings above and the strength selector.</p>
+    <div class="row"><span class="hint">Games</span>${[10, 50, 200].map((n) => `<button class="btn small ${ui.seriesGames === n ? "on" : ""}" data-act="series-games" data-n="${n}">${n}</button>`).join("")}
+    ${ui.series && ui.series.running ? '<button class="btn small" data-act="series-stop">Stop</button>' : '<button class="btn small primary" data-act="series-run">Run series</button>'}</div>`;
+  const sr = ui.series;
+  if (!sr) return h;
+  const g = sr.games, wins = g.filter((x) => x.won).length;
+  const nets = g.flatMap((x) => x.nets);
+  const mean = nets.length ? nets.reduce((a, b) => a + b, 0) / nets.length : 0;
+  const sd = nets.length > 1 ? Math.sqrt(nets.reduce((a, b) => a + (b - mean) ** 2, 0) / (nets.length - 1)) : 0;
+  h += `<table class="moves"><tr><td>Games</td><td class="v num">${g.length} / ${sr.total}${sr.running ? ' <span class="thinking"><i></i></span>' : ""}</td></tr>
+    <tr><td>SB Engine wins</td><td class="v num">${wins}–${g.length - wins}${g.length ? ` (${Math.round((100 * wins) / g.length)}%)` : ""}</td></tr>
+    <tr><td>SB Engine chips per hand</td><td class="v num">${nets.length ? fmt(mean) + ` ± ${(sd / Math.sqrt(nets.length)).toFixed(2)}` : "–"}</td></tr>
+    <tr><td>Hands played</td><td class="v num">${nets.length}</td></tr></table>
+    <p class="stats">SB Engine ${sr.cfg.level} vs HaviEngine (${haviLabel(sr.cfg.version)}) at ${sr.cfg.haviMs} ms · ${Math.round((Date.now() - sr.t0) / 1000)} s</p>`;
+  if (sr.error) h += `<div class="notice">${esc(sr.error)}</div>`;
+  return h;
+}
+
+// Second engine runner for the eval bar while bots are playing (so the bar and the moves don't wait on each other).
+const bar = { worker: null, busy: false, id: 0 };
+function barRun(cmd, handler) {
+  const id = ++bar.id;
+  if (NATIVE) {
+    fetch("/api/run", { method: "POST", body: cmd + "\n" + log.join("\n") }).then((r) => r.json()).then((r) => { if (id === bar.id) handler(r); }).catch(() => {});
+    return;
+  }
+  if (!bar.worker || bar.busy) {
+    if (bar.worker) bar.worker.terminate();
+    bar.worker = new Worker(URL.createObjectURL(new Blob([WORKER_SRC], { type: "text/javascript" })));
+    bar.worker.postMessage({ type: "init", bytes: wasmBytes.buffer.slice(0) });
+    bar.worker.onmessage = (e) => { const m = e.data; if (m.type === "result" && m.id === bar.id && m.final) { bar.busy = false; handler(m.r); } };
+  }
+  bar.busy = true;
+  bar.worker.postMessage({ type: "run", id, log: log.slice(), cmds: [cmd] });
+}
+
+function setBarFrom(r) {
+  if (!r || r.ok === false) return;
+  if (r.kind === "bid") { ui.barEval = null; ui.barLabel = "bid"; }
+  else { ui.barEval = r.eval; ui.barLabel = ""; }
+  renderBar();
+}
+
+function renderBar() {
+  const el = $("vbar");
+  const show = ui.evalBar && S && S.started && S.handNumber > 0;
+  el.hidden = !show;
+  if (!show) return;
+  const v = ui.barEval;
+  const frac = v == null ? 0.5 : 0.5 + 0.5 * Math.tanh(v / 6);
+  $("vbar-fill").style.height = (frac * 100).toFixed(1) + "%";
+  el.className = "vbar " + (v != null && v < 0 ? "s2" : "s1");
+  $("vbar-num").textContent = v == null ? (ui.barLabel || "") : (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(1);
+  el.setAttribute("aria-label", v == null ? "Evaluation pending" : `Evaluation ${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(1)} chips, favors Seat ${v >= 0 ? 1 : 2}`);
+}
+
+function analyzable() { return S && S.started && S.handNumber > 0 && (S.phase === "play" || S.phase === "bidding"); }
+function botsTurn() { return S && S.match && analyzable() && S.toMove !== S.me; }
+
+function runHavi(seat, handler) {
+  const id = ++jobId;
+  onJob = handler;
+  if (workerBusy) { worker.terminate(); startWorker(); }
+  workerBusy = true;
+  worker.postMessage({ type: "havi", id, log: log.slice(), seat, version: ui.arenaCfg.version, limitMs: ui.arenaCfg.haviMs });
+}
+
+// Bot vs bot: ask whichever bot is to act, then play its move after a short pause.
+function arenaStep() {
+  ui.thinkingSeat = 0;
+  if (!S || !S.arena || ui.arenaPaused || S.phase === "gameover") { renderActions(); return; }
+  if (S.phase === "handover") { botTimer = setTimeout(() => { if (!ui.arenaPaused) send("next"); }, ui.arenaCfg.delay * 2 + 600); renderActions(); return; }
+  const who = S.toMove, started = Date.now(), lv = LEVELS[ui.level];
+  ui.thinkingSeat = who;
+  const done = (r) => {
+    ui.thinkingSeat = 0;
+    if (!r.ok) { ui.error = r.error; ui.arenaPaused = true; render(); return; }
+    botTimer = setTimeout(() => {
+      if (ui.arenaPaused) { renderActions(); return; }
+      if (ui.stepOnce) { ui.stepOnce = false; ui.arenaPaused = true; }
+      send(`move ${r.move}`);
+    }, Math.max(0, ui.arenaCfg.delay - (Date.now() - started)));
+  };
+  if (who === ui.arenaCfg.ourSeat) runJob([`botchoice ${lv.dets} ${lv.nodes} ${log.length}`], done);
+  else runHavi(who, done);
+  renderActions();
+}
+
+function analyze() {
+  clearTimeout(botTimer);
+  ui.botThinking = false;
+  if (S && S.arena) {
+    ui.analysis = null;
+    arenaStep();
+    if (ui.evalBar && analyzable()) barRun(NATIVE ? "analyze 48 20000 1" : "analyze 16 6000 1", setBarFrom);
+    return;
+  }
+  if (!analyzable()) { ui.analysis = null; renderEngine(); return; }
+  const lv = LEVELS[ui.level];
+  if (botsTurn()) {
+    // The engine plays its seat. A short pause keeps its moves readable.
+    ui.botThinking = true;
+    if (!ui.hints) ui.analysis = null;
+    const started = Date.now();
+    runJob([`botchoice ${lv.dets} ${lv.nodes} ${log.length}`], (r) => {
+      ui.botThinking = false;
+      if (!r.ok) { ui.error = r.error; render(); return; }
+      botTimer = setTimeout(() => send(`move ${r.move}`), Math.max(0, 650 - (Date.now() - started)));
+    });
+    renderActions(); renderEngine();
+    return;
+  }
+  if (S.match && !ui.hints) {
+    ui.analysis = null;
+    renderEngine();
+    if (ui.evalBar) { const lv2 = LEVELS[ui.level]; barRun(`analyze ${lv2.dets} ${lv2.nodes} 1`, setBarFrom); }
+    return;
+  }
+  ui.analysis = { pending: true };
+  runJob([`analyze 8 1500 1`, `analyze ${lv.dets} ${lv.nodes} 1`], (r, final) => {
+    ui.analysis = Object.assign({}, r, { final });
+    setBarFrom(r);
+    renderEngine();
+  });
+  renderEngine();
+}
+
+// ------------------------------------------------------------ board model
+function buildBoard(L) {
+  const s = 32, items = [], slots = [];
+  if (!L.center && !L.spinner) {
+    slots.push({ x: -s, y: -s / 2, w: 2 * s, h: s, code: "", label: "lead" });
+    return { items, slots };
+  }
+  const dirs = ["L", "R", "U", "D"];
+  const front = L.center ? { L: -s, R: s, U: -s / 2, D: s / 2 } : { L: -s / 2, R: s / 2, U: -s, D: s };
+  if (L.center) items.push({ x: -s, y: -s / 2, a: +L.center[0], b: +L.center[1], o: "h", t: L.center });
+  else items.push({ x: -s / 2, y: -s, a: +L.spinner[0], b: +L.spinner[0], o: "v", t: L.spinner, spinner: true });
+  L.arms.forEach((arm, i) => {
+    const d = dirs[i];
+    for (const p of arm) {
+      const dbl = p.in === p.out;
+      if (d === "L" || d === "R") {
+        const w = dbl ? s : 2 * s, h = dbl ? 2 * s : s;
+        const x = d === "L" ? front.L - w : front.R;
+        if (dbl) items.push({ x, y: -h / 2, a: p.in, b: p.in, o: "v", t: p.t });
+        else items.push({ x, y: -h / 2, a: d === "L" ? p.out : p.in, b: d === "L" ? p.in : p.out, o: "h", t: p.t });
+        if (d === "L") front.L -= w; else front.R += w;
+      } else {
+        const w = dbl ? 2 * s : s, h = dbl ? s : 2 * s;
+        const y = d === "U" ? front.U - h : front.D;
+        if (dbl) items.push({ x: -w / 2, y, a: p.in, b: p.in, o: "h", t: p.t });
+        else items.push({ x: -w / 2, y, a: d === "U" ? p.out : p.in, b: d === "U" ? p.in : p.out, o: "v", t: p.t });
+        if (d === "U") front.U -= h; else front.D += h;
+      }
+    }
+  });
+  for (const e of L.ends) {
+    const d = dirs[e.spinner ? e.slot : e.arm];
+    const horiz = d === "L" || d === "R";
+    const w = horiz ? 2 * s : s, h = horiz ? s : 2 * s;
+    const x = d === "L" ? front.L - w - 6 : d === "R" ? front.R + 6 : -w / 2;
+    const y = d === "U" ? front.U - h - 6 : d === "D" ? front.D + 6 : -h / 2;
+    slots.push({ x, y, w, h, code: e.code, label: e.code + (e.spinner ? " ✦" : "") });
+  }
+  return { items, slots };
+}
+
+// ------------------------------------------------------------ rendering
+function render() {
+  renderTop(); renderBoard(); renderRack(); renderActions(); renderEngine(); renderHistory(); renderBar();
+}
+
+function renderTop() {
+  if (!S || !S.started) { $("seats").innerHTML = ""; $("meta").innerHTML = ""; return; }
+  $("seats").innerHTML = [1, 2].map((seat) => {
+    const pool = S.pools[seat - 1];
+    const chips = Array.from({ length: 30 }, (_, i) => `<i class="${i < pool ? "" : "gone"}"></i>`).join("");
+    const live = (S.phase === "play" || S.phase === "bidding") && S.toMove === seat;
+    return `<div class="seat ${live ? "to-move" : ""}" style="--c: var(${seatVar(seat)}); --c-soft: var(${seatVar(seat)}-soft)">
+      <div class="who"><b>${seatName(seat)}</b> Seat ${seat}${S.jockey === seat ? ' <span class="badge">Jockey</span>' : ""}</div>
+      <div class="pool"><span class="n num">${pool}</span><div class="chips" title="${pool} of 30 chips in pool">${chips}</div></div>
+    </div>`;
+  }).join("");
+  $("meta").innerHTML = (S.handNumber ? `<span>Hand <b class="num">${S.handNumber}</b></span>` : "") + `<button class="btn small ${ui.evalBar ? "on" : ""}" data-act="evalbar" aria-pressed="${ui.evalBar}">Eval bar</button><button class="btn small" data-act="choose-seat">New game</button>`;
+}
+
+function renderBoard() {
+  const hud = $("hud"), box = $("boardsvg");
+  if (!S || !S.started || !S.handNumber) {
+    hud.innerHTML = "";
+    box.innerHTML = `<p style="color: var(--felt-muted); text-align: center; max-width: 40ch">The table is empty. Enter your seven tiles to start a hand.</p>`;
+    return;
+  }
+  const L = S.layout;
+  const c = L.count;
+  if (S.phase === "bidding") {
+    hud.innerHTML = `<span>${oppName()} <b class="num">${S.oppCount}</b> tiles</span><span>Boneyard <b class="num">${S.boneyard}</b></span>`;
+    box.innerHTML = `<p style="color: var(--felt-muted); text-align: center; max-width: 40ch">Bidding for the lead.${S.bid.by ? ` ${seatName(S.bid.by)} ${S.bid.by === S.me ? "are" : "is"} high at ${S.bid.current}.` : ""}</p>`;
+    return;
+  }
+  hud.innerHTML = `<span class="count">Count <b class="num">${c}</b>${c > 0 && c % 5 === 0 ? ' <span class="scores">scores ' + c + "</span>" : ""}</span>
+    <span>${oppName()} <b class="num">${S.oppCount}</b> tiles</span><span>Boneyard <b class="num">${S.boneyard}</b></span>`;
+  const { items, slots } = buildBoard(L);
+  const pend = ui.pending;
+  const last = lastTilePlayed();
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const showSlots = S.phase === "play";
+  for (const r of [...items, ...(showSlots ? slots : [])]) {
+    const w = r.w || (r.o === "h" ? 64 : 32), h = r.h || (r.o === "h" ? 32 : 64);
+    minX = Math.min(minX, r.x); minY = Math.min(minY, r.y); maxX = Math.max(maxX, r.x + w); maxY = Math.max(maxY, r.y + h);
+  }
+  const pad = 14;
+  minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+  const W = maxX - minX, H = maxY - minY;
+  let g = items.map((it) => tileSVG(it.x, it.y, it.a, it.b, it.o, 32, it.t === last ? "last" : "")).join("");
+  if (showSlots) {
+    g += slots.map((sl) => {
+      const live = pend && (sl.code === "" ? pend.codes.includes("") : pend.codes.includes(sl.code));
+      const attrs = live ? `class="slot live" data-act="target" data-code="${esc(sl.code)}" tabindex="0" role="button" aria-label="Play on ${esc(sl.label)}"` : `class="slot"`;
+      return `<g ${attrs}><rect x="${sl.x + 2}" y="${sl.y + 2}" width="${sl.w - 4}" height="${sl.h - 4}" rx="5"/><text x="${sl.x + sl.w / 2}" y="${sl.y + sl.h / 2}">${esc(sl.label)}</text></g>`;
+    }).join("");
+  }
+  // Scale: never larger than 1.35x, never so small that pips become unreadable (scroll instead).
+  const minW = Math.round(Math.min(W * 0.75, 1600)), maxW = Math.round(W * 1.35);
+  box.innerHTML = `<svg viewBox="${minX} ${minY} ${W} ${H}" style="width: min(100%, ${maxW}px); min-width: ${minW}px; aspect-ratio: ${W} / ${H}" role="img" aria-label="Layout, count ${c}">${g}</svg>`;
+}
+
+function myLegalByTile() {
+  const m = new Map();
+  if (!S || S.phase !== "play" || S.toMove !== S.me) return m;
+  for (const a of S.legal) if (a.kind === "play") { if (!m.has(a.tile)) m.set(a.tile, []); m.get(a.tile).push(a.code); }
+  return m;
+}
+
+function renderRack() {
+  const w = $("rackwrap");
+  if (S && S.arena) {
+    w.innerHTML = [1, 2].map((seat) => {
+      const tiles = S.hands[seat - 1];
+      const pips = tiles.reduce((a, t) => a + +t[0] + +t[1], 0);
+      return `<div class="arena-rack" style="--c: var(${seatVar(seat)})"><div class="rack-label"><b style="color: var(--c)">${seatName(seat)}</b> · Seat ${seat} · <b class="num">${pips}</b> pips${ui.thinkingSeat === seat ? ' <span class="thinking"><i></i>thinking</span>' : ""}</div>
+        <div class="rack">${tiles.slice().reverse().map((t) => `<span class="rtile">${tileIcon(t, "v")}</span>`).join("") || '<span class="hint">out</span>'}</div></div>`;
+    }).join("");
+    return;
+  }
+  if (!S || !S.started || !S.handNumber || !S.myHand.length) { w.innerHTML = ""; return; }
+  const legal = myLegalByTile();
+  const myTurn = S.phase === "play" && S.toMove === S.me;
+  w.innerHTML = `<div class="rack-label">Your hand · <b class="num">${S.myPips}</b> pips</div>
+    <div class="rack">${S.myHand.slice().reverse().map((t) => {
+      const cls = ui.pending && ui.pending.tile === t ? "pending" : myTurn ? (legal.has(t) ? "legal" : "dim") : "";
+      return `<button class="${cls}" data-act="rack" data-tile="${t}" aria-label="Tile ${t[0]}-${t[1]}" ${myTurn && legal.has(t) ? "" : 'aria-disabled="true"'}>${tileIcon(t, "v")}</button>`;
+    }).join("")}</div>`;
+}
+
+function pickerHTML(opts) {
+  // opts: { isAvail(t), isSel(t), fits(t), excl(t) }
+  const rows = [];
+  for (let h = 6; h >= 0; h--) {
+    const cells = [];
+    for (let l = h; l >= 0; l--) {
+      const t = `${h}${l}`;
+      const avail = opts.isAvail(t);
+      const cls = [opts.isSel && opts.isSel(t) ? "sel" : "", avail && opts.fits && opts.fits(t) ? "fits" : "", avail && opts.excl && opts.excl(t) ? "excl" : ""].join(" ");
+      cells.push(`<button class="${cls}" data-act="pick" data-tile="${t}" ${avail ? "" : "disabled"} aria-label="${h}-${l}">${tileIcon(t)}</button>`);
+    }
+    rows.push(`<div class="prow">${cells.join("")}</div>`);
+  }
+  return `<div class="picker">${rows.join("")}</div>`;
+}
+
+function notationBox(placeholder) {
+  return `<form class="notation" data-form="notation"><input id="notation-input" autocomplete="off" spellcheck="false" placeholder="${esc(placeholder)}" aria-label="Type a move in notation"><button class="btn" type="submit">Enter</button></form>`;
+}
+
+function renderActions() {
+  const el = $("actions");
+  let h = "";
+  if (ui.error) h += `<div class="notice" role="alert">${esc(ui.error)}</div>`;
+  if (ui.info) h += `<div class="notice info">${esc(ui.info)}</div>`;
+  if (ui.example && S && S.started) h += `<div class="notice info">This is an example game in progress. Start a new game when you sit down at the table. <button class="btn small" data-act="choose-seat">New game</button></div>`;
+
+  if (!S || !S.started || ui.choosingSeat) {
+    h += `<h2>New game</h2>
+      <div class="choice"><h3>Play against the engine</h3><p>The app deals the tiles. The engine plays the other seat and keeps its tiles hidden.</p>
+        <div class="row"><button class="btn primary" data-act="match" data-seat="1">Play as Seat 1 (blue)</button><button class="btn red" data-act="match" data-seat="2">Play as Seat 2 (red)</button></div></div>
+      <div class="choice"><h3>Analyze a game at the table</h3><p>Enter your tiles and each move as it happens. The engine advises from your seat and works out what it can't see.</p>
+        <div class="row"><button class="btn" data-act="new" data-seat="1">I'm Seat 1 (blue)</button><button class="btn" data-act="new" data-seat="2">I'm Seat 2 (red)</button></div></div>
+      <div class="choice"><h3>Bot vs bot</h3><p>The SB Engine plays HaviEngine. Watch a game here, or run a series of whole games with no animation (results in the engine panel).</p>
+        <div class="row"><span class="hint">SB Engine sits at</span><button class="btn small ${ui.arenaCfg.ourSeat === 1 ? "on" : ""}" data-act="arena-seat" data-seat="1">Seat 1</button><button class="btn small ${ui.arenaCfg.ourSeat === 2 ? "on" : ""}" data-act="arena-seat" data-seat="2">Seat 2</button></div>
+        ${haviOptions()}
+        <div class="row"><button class="btn primary" data-act="arena">Watch a game</button></div>
+        <div class="row"><span class="hint">Series games</span>${[10, 50, 200].map((n) => `<button class="btn small ${ui.seriesGames === n ? "on" : ""}" data-act="series-games" data-n="${n}">${n}</button>`).join("")}
+          ${ui.series && ui.series.running ? '<button class="btn" data-act="series-stop">Stop series</button>' : '<button class="btn primary" data-act="series-run">Run series</button>'}</div></div>
+      ${S && S.started ? '<div class="row"><button class="btn" data-act="cancel-seat">Cancel</button></div>' : ""}`;
+    el.innerHTML = h; return;
+  }
+
+  const ph = S.phase;
+  if (S.arena) {
+    const status = ph === "gameover" ? `${seatName(S.winner)} wins the game`
+      : ph === "handover" ? `${S.lastEnd === "domino" ? seatName(S.jockey) + " went out" : "The hand blocked"}. Next hand shortly.`
+      : ui.arenaPaused ? "Paused" : ui.thinkingSeat ? `${seatName(ui.thinkingSeat)} is thinking` : `${seatName(S.toMove)} to act`;
+    h += `<h2>${esc(status)}</h2>
+      <p>Seat 1: ${seatName(1)} · Seat 2: ${seatName(2)}. SB Engine strength: ${LEVELS[ui.level].label}. HaviEngine: ${haviLabel(ui.arenaCfg.version)}, ${ui.arenaCfg.haviMs} ms per move.</p>
+      <div class="row">
+        ${ph === "gameover" ? '<button class="btn primary" data-act="arena">Next game</button>' : ui.arenaPaused ? '<button class="btn primary" data-act="arena-resume">Resume</button><button class="btn" data-act="arena-step">Step</button>' : '<button class="btn" data-act="arena-pause">Pause</button>'}
+        <span class="levels" role="group" aria-label="Speed">${[["Fast", 150], ["Normal", 700], ["Slow", 1600]].map(([l, d]) => `<button class="${ui.arenaCfg.delay === d ? "on" : ""}" data-act="arena-speed" data-delay="${d}">${l}</button>`).join("")}</span>
+        <button class="btn" data-act="choose-seat">New game</button>
+      </div>`;
+    el.innerHTML = h; return;
+  }
+  if (ph === "gameover") {
+    h += `<h2>${S.winner === S.me ? "You won the game" : oppName() + " won the game"}</h2><p>A pool ran out of chips. Copy the record from the log to keep it.</p>
+      ${S.match && S.revealed.length ? `<div class="row"><span class="hint">Engine's leftover tiles:</span><span class="reveal">${S.revealed.map((t) => tileIcon(t)).join("")}</span></div>` : ""}
+      <div class="row"><button class="btn primary" data-act="choose-seat">New game</button><button class="btn" data-act="undo">Undo last move</button></div>`;
+    el.innerHTML = h; return;
+  }
+
+  if (ph === "handover" && (S.handNumber === 0 || ui.dealing)) {
+    const n = ui.sel.size;
+    const bidding = S.jockey > 0;
+    h += `<h2>Deal hand ${S.handNumber + 1}<small>${n} of 7 tiles</small></h2>
+      <p>Tap your seven tiles.${bidding ? ` ${seatName(S.jockey)} dominoed last hand, so this hand opens with bidding.` : " Then pick who holds the forced lead (highest double, or heaviest tile if no doubles)."}</p>
+      ${pickerHTML({ isAvail: () => true, isSel: (t) => ui.sel.has(t) })}`;
+    if (!bidding) h += `<div class="row"><span class="hint">Forced lead:</span><button class="btn small ${ui.leader === S.me ? "on" : ""}" data-act="leader" data-seat="${S.me}">Me</button><button class="btn small ${ui.leader === 3 - S.me ? "on" : ""}" data-act="leader" data-seat="${3 - S.me}">Opponent</button></div>`;
+    h += `<div class="row"><button class="btn primary" data-act="start-hand" ${n === 7 && (bidding || ui.leader) ? "" : "disabled"}>Start hand</button>${n ? '<button class="btn" data-act="clear-sel">Clear</button>' : ""}${S.handNumber ? '<button class="btn" data-act="cancel-deal">Back</button>' : ""}</div>`;
+    el.innerHTML = h; return;
+  }
+
+  if (ph === "handover") {
+    const hand = S.history[S.history.length - 1];
+    const end = S.lastEnd === "domino" ? `${seatName(S.jockey)} dominoed` : "The hand blocked";
+    h += `<h2>${end}</h2>`;
+    if (S.match) {
+      h += `<p>Pools: you ${S.pools[S.me - 1]}, engine ${S.pools[2 - S.me]}.</p>
+        ${S.revealed.length ? `<div class="row"><span class="hint">Engine's leftover tiles (${S.revealed.reduce((a, t) => a + +t[0] + +t[1], 0)} pips):</span><span class="reveal">${S.revealed.map((t) => tileIcon(t)).join("")}</span></div>` : ""}
+        <div class="row"><button class="btn primary" data-act="next">Deal next hand</button><button class="btn" data-act="undo">Undo</button></div>`;
+      el.innerHTML = h; return;
+    }
+    if (S.needsReveal && !ui.revealSkipped) {
+      const n = ui.sel.size;
+      h += `<p>Tap the opponent's ${S.oppCount} leftover tiles to settle the pip count, or skip and fix the chip counts yourself.</p>
+        ${pickerHTML({ isAvail: (t) => S.unknown.includes(t), isSel: (t) => ui.sel.has(t) })}
+        <div class="row"><button class="btn primary" data-act="reveal" ${n === S.oppCount ? "" : "disabled"}>Settle (${n} of ${S.oppCount})</button><button class="btn" data-act="skip-reveal">Skip</button></div>`;
+    } else {
+      h += `<p>Pools: you ${S.pools[S.me - 1]}, opponent ${S.pools[2 - S.me]}.</p>
+        <div class="row"><button class="btn primary" data-act="deal">Deal next hand</button><button class="btn" data-act="undo">Undo</button></div>`;
+    }
+    el.innerHTML = h; return;
+  }
+
+  if (ph === "bidding") {
+    const mine = S.toMove === S.me;
+    const opener = S.bid.by === 0;
+    const lo = opener ? 1 : S.bid.current + 1;
+    const hi = mine ? S.bid.maxMe : S.bid.maxOpp;
+    ui.bid = Math.min(Math.max(ui.bid, lo), Math.max(lo, hi));
+    if (S.match && !mine) {
+      h += `<h2>Engine's bid</h2><p><span class="thinking"><i></i>The engine is weighing its hand${S.bid.by ? ` against your bid of ${S.bid.current}` : ""}.</span></p>`;
+      el.innerHTML = h; return;
+    }
+    const who = mine ? "Your" : "Opponent's";
+    h += `<h2>${who} bid<small>${opener ? "opening" : `current bid ${S.bid.current} by ${seatName(S.bid.by)}`}</small></h2>
+      <p>${opener ? "The loser of the last hand opens. A bid of 0 passes and the jockey leads for free." : "Raise by at least 1, or accept and let the high bidder lead."} The jockey's 3-chip credit is applied when they pay.</p>
+      <div class="row">
+        ${lo <= hi ? `<span class="stepper"><button data-act="bid-step" data-d="-1" aria-label="Lower bid">−</button><output class="num">${ui.bid}</output><button data-act="bid-step" data-d="1" aria-label="Raise bid">+</button></span>
+        <button class="btn primary" data-act="bid">${mine ? "Bid" : "Opponent bids"} ${ui.bid}</button>` : ""}
+        ${opener ? `<button class="btn" data-act="bid-zero">${mine ? "Pass (bid 0)" : "Opponent passes (bid 0)"}</button>` : `<button class="btn" data-act="accept">${mine ? "Accept" : "Opponent accepts"}</button>`}
+      </div>
+      ${notationBox("b3, b0 or a")}`;
+    el.innerHTML = h; return;
+  }
+
+  // play phase
+  const mine = S.toMove === S.me;
+  if (ui.picker === "my-draw") {
+    h += `<h2>Which tile did you draw?</h2>${pickerHTML({ isAvail: (t) => S.unknown.includes(t) })}<div class="row"><button class="btn" data-act="cancel">Cancel</button></div>`;
+    el.innerHTML = h; return;
+  }
+  if (ui.picker === "opp-play") {
+    const ends = S.layout.ends;
+    const fits = (t) => (S.layout.count === 0 && !S.layout.center && !S.layout.spinner) || ends.some((e) => fitsPip(t, e.pip));
+    const excl = new Set(S.excluded);
+    h += `<h2>Which tile did the opponent play?</h2>
+      ${pickerHTML({ isAvail: (t) => S.unknown.includes(t), fits, excl: (t) => excl.has(t) })}
+      <div class="legend"><span><i style="background: var(--good-soft)"></i>fits an open end</span><span><i style="background: var(--bad)"></i>engine thought they could not hold it</span></div>
+      <div class="row"><button class="btn" data-act="cancel">Cancel</button></div>`;
+    el.innerHTML = h; return;
+  }
+  if (ui.pending) {
+    h += `<h2>Where does ${ui.pending.tile[0]}-${ui.pending.tile[1]} go?</h2><p>Tap a highlighted end on the table.</p>
+      <div class="row">${ui.pending.codes.map((c) => `<button class="btn mono" data-act="target" data-code="${esc(c)}">${esc(ui.pending.tile + c)}</button>`).join("")}<button class="btn" data-act="cancel">Cancel</button></div>`;
+    el.innerHTML = h; return;
+  }
+  if (mine) {
+    const canDraw = S.legal.some((a) => a.kind === "draw");
+    const canPass = S.legal.some((a) => a.kind === "pass");
+    const forced = S.legal.length === 1 && S.legal[0].kind === "play";
+    h += `<h2>Your move</h2>
+      <p>${canDraw ? "Nothing in your hand fits. Draw from the boneyard." : canPass ? "Nothing fits and the boneyard is empty. You pass." : forced ? `Your only play is ${S.legal[0].n}.` : "Tap a raised tile in your hand, or play the engine's pick."}</p>
+      <div class="row">
+        ${canDraw ? `<button class="btn primary" data-act="my-draw">${S.match ? "Draw a tile" : "I drew a tile"}</button>` : ""}
+        ${canPass ? '<button class="btn primary" data-act="my-pass">Pass</button>' : ""}
+        ${canPass ? '<button class="btn" data-act="blocked">Hand is blocked</button>' : ""}
+        <button class="btn" data-act="undo">Undo</button>
+      </div>
+      ${notationBox("41@4, d32 or p")}`;
+  } else {
+    if (S.match) {
+      h += `<h2>Engine's move</h2><p><span class="thinking"><i></i>Thinking</span></p>`;
+      el.innerHTML = h; return;
+    }
+    const canPass = S.boneyard === 0;
+    h += `<h2>Opponent's move</h2><p>Record what they did.</p>
+      <div class="row">
+        <button class="btn red" data-act="opp-play">Played a tile</button>
+        ${S.boneyard > 0 ? '<button class="btn" data-act="opp-draw">Drew a tile</button>' : ""}
+        ${canPass ? '<button class="btn" data-act="opp-pass">Passed</button><button class="btn" data-act="blocked">Hand is blocked</button>' : ""}
+        <button class="btn" data-act="undo">Undo</button>
+      </div>
+      ${notationBox("53@s, d or p")}`;
+  }
+  el.innerHTML = h;
+}
+
+function renderEngine() {
+  const el = $("engine");
+  const lvButtons = Object.entries(LEVELS).map(([k, v]) => `<button class="${ui.level === k ? "on" : ""}" data-act="level" data-level="${k}">${v.label}</button>`).join("");
+  let h = `<div class="row" style="justify-content: space-between"><h2>Engine</h2><span class="levels" role="group" aria-label="Search depth">${lvButtons}</span></div>`;
+  const A = ui.analysis;
+  if ((S && S.arena) || ui.series) {
+    h += `<p>Strength sets how hard the SB Engine searches in bot games.</p>${seriesHTML()}`;
+    el.innerHTML = h; return;
+  }
+  if (S && S.match) h += `<div class="row"><span class="hint">Engine strength: ${LEVELS[ui.level].label}.</span><button class="btn small ${ui.hints ? "on" : ""}" data-act="hints">${ui.hints ? "Hide hints" : "Show hints"}</button></div>`;
+  if (S && S.match && !ui.hints) {
+    h += `<p>Hints are off while you play the engine. Turn them on to see its read of your options.</p>`;
+    el.innerHTML = h; return;
+  }
+  if (S && S.match && ui.botThinking) { h += `<span class="thinking"><i></i>Engine is choosing its move</span>`; el.innerHTML = h; return; }
+  if (!analyzable()) {
+    h += `<p>The engine reads the position once a hand is under way: the best move on your turn, and how the hand stands on the opponent's turn.</p>`;
+    el.innerHTML = h; return;
+  }
+  if (!A || A.pending) { h += `<span class="thinking"><i></i>Thinking</span>`; el.innerHTML = h; return; }
+  if (A.ok === false) { h += `<div class="notice">${esc(A.error || "Analysis failed.")}</div>`; el.innerHTML = h; return; }
+
+  const status = A.final ? `<span class="stats">${A.stats.models ? esc(A.stats.models) + " · " : ""}${A.stats.dets} deals · depth ${A.stats.depth.toFixed(1)} · ${(A.stats.nodes / 1000).toFixed(0)}k nodes · ${A.ms} ms</span>` : `<span class="thinking"><i></i>Searching deeper</span>`;
+  // One evaluation for everyone: chips for the rest of the hand, + favors Seat 1 (blue), - favors Seat 2 (red).
+  const seatOf = (v) => (v >= 0 ? 1 : 2);
+  const bar = (v) => {
+    const c = Math.max(-10, Math.min(10, v)), pct = Math.abs(c) * 5;
+    return `<div class="evalbar" aria-hidden="true"><span style="${c >= 0 ? "left: 50%" : `left: ${50 - pct}%`}; width: ${pct}%; background: var(${seatVar(seatOf(c))})"></span></div><div class="evalscale"><span>Seat 2 · −10</span><span>0</span><span>+10 · Seat 1</span></div>`;
+  };
+  const favors = (v) => Math.abs(v) < 0.05 ? "Even" : `Favors Seat ${seatOf(v)} (${seatName(seatOf(v))})`;
+  const evnum = (v) => `<span class="evalnum" style="color: var(${Math.abs(v) < 0.05 ? "--ink" : seatVar(seatOf(v))})">${fmt(v, 1)}</span>`;
+
+  if (A.kind === "bid") {
+    const mineToAct = S.toMove === S.me;
+    h += `<div class="evalhead">${evnum(A.seat1Leads)}<span class="hint">if Seat 1 leads · ${evnum(A.seat2Leads).replace("evalnum", "evalnum small")} if Seat 2 leads</span></div>
+      ${bar(A.seat1Leads)}${bar(A.seat2Leads)}
+      <table class="moves"><tr><td>Lead is worth to you</td><td class="v num">${A.leadValue.toFixed(2)} chips</td></tr><tr><td>Your walk-away bid</td><td class="v num">${A.walkAway}</td></tr></table>
+      ${A.suggestion && mineToAct ? `<div class="row"><span>Suggested:</span><button class="btn primary mono" data-act="play-move" data-n="${esc(A.suggestion)}">${esc(A.suggestion === "b0" ? "pass (b0)" : A.suggestion === "a" ? "accept" : A.suggestion)}</button></div>` : ""}
+      <p class="hint">Chips for the rest of this hand. + favors Seat 1, − favors Seat 2.</p>
+      ${status}`;
+  } else {
+    const ev = A.eval;
+    h += `<div class="evalhead">${evnum(ev)}<span class="hint">${favors(ev)}</span></div>${bar(ev)}
+      <p class="hint">Chips expected over the rest of this hand. + favors Seat 1, − favors Seat 2.</p>`;
+    if (A.kind === "moves") {
+      const good = (v) => (S.me === 1 ? v : -v);
+      const best = good(A.moves[0].ev), worst = good(A.moves[A.moves.length - 1].ev);
+      const span = Math.max(1, best - Math.min(worst, 0));
+      h += `<table class="moves">${A.moves.map((m, i) => `<tr class="click ${i === 0 ? "best" : ""}" data-act="play-move" data-n="${esc(m.n)}" title="Play ${esc(m.n)}">
+          <td class="n">${esc(m.n)}</td><td class="bar"><span style="width: ${Math.max(3, ((good(m.ev) - Math.min(worst, 0)) / span) * 100)}%; background: var(${seatVar(S.me)})"></span></td>
+          <td class="v num">${fmt(m.ev)}</td><td class="se num">±${m.se.toFixed(2)}</td></tr>`).join("")}</table>
+        <p class="hint">Your options, best first. Tap one to play it. ± is the spread across sampled deals.</p>`;
+    } else {
+      h += `<p class="hint">${oppName()} to move. This is the engine's read from what you can see.</p>`;
+    }
+    h += status;
+  }
+  if (S.excluded && S.excluded.length) h += `<div class="hint">${oppName()} can't hold: ${S.excluded.map((t) => `<span class="mono-chip">${t}</span>`).join(" ")}</div>`;
+  el.innerHTML = h;
+}
+
+function renderHistory() {
+  const el = $("history");
+  if (!S || !S.started) { el.innerHTML = `<h2>Game log</h2><p>Moves appear here in notation as you record them.</p>`; return; }
+  let h = `<div class="row" style="justify-content: space-between"><h2>Game log</h2><div class="row"><button class="btn small" data-act="undo" ${log.length > 1 ? "" : "disabled"}>Undo</button><button class="btn small" data-act="record">${ui.showRecord ? "Hide record" : "Record"}</button></div></div>`;
+  if (!S.history.length) h += `<p>No hands yet.</p>`;
+  h += `<div class="hand-log">` + S.history.slice().reverse().map((hd) => `<h3>${esc(hd.header.replace(/^#(\d+)/, "Hand $1 ·").replace("lead", "lead seat").replace("jockey", "jockey seat"))}</h3>
+      <div class="mv">${hd.moves.map((m) => `<span style="--c: var(${seatVar(m.seat)})" title="${seatName(m.seat)}">${esc(m.n)}${m.pts ? `<em>+${m.pts}</em>` : ""}</span>`).join("") || '<span style="--c: var(--line)">no moves yet</span>'}</div>
+      ${hd.end ? `<div class="endline">${esc(prettyEnd(hd.end))}</div>` : ""}`).join("") + `</div>`;
+  if (ui.showRecord) {
+    const rec = engine.cmd("record");
+    h += `<textarea class="record" id="record-text" readonly aria-label="Game record">${esc(rec.text || "")}</textarea><div class="row"><button class="btn small" data-act="copy-record">Copy record</button><span class="hint" id="copy-status"></span></div>`;
+  }
+  el.innerHTML = h;
+}
+
+// ------------------------------------------------------------ interaction
+function chooseTile(tile, who) {
+  ui.error = "";
+  const L = S.layout;
+  if (!L.center && !L.spinner) { send(`move ${tile}`); return; }
+  let codes;
+  if (who === "me") codes = myLegalByTile().get(tile) || [];
+  else {
+    codes = [];
+    for (const e of L.ends) if (fitsPip(tile, e.pip) && !codes.includes(e.code)) codes.push(e.code);
+  }
+  if (!codes.length) { ui.error = `${tile[0]}-${tile[1]} does not fit any open end.`; render(); return; }
+  if (codes.length === 1) { send(`move ${tile}${codes[0]}`); return; }
+  ui.pending = { tile, who, codes };
+  ui.picker = null;
+  render();
+}
+
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-act]");
+  if (!el || el.disabled || el.getAttribute("aria-disabled") === "true") return;
+  const a = el.dataset.act;
+  switch (a) {
+    case "choose-seat": ui.choosingSeat = true; render(); break;
+    case "cancel-seat": ui.choosingSeat = false; render(); break;
+    case "new": ui.choosingSeat = false; ui.dealing = true; ui.sel.clear(); ui.leader = 0; send(`new ${el.dataset.seat}`).then(() => { ui.dealing = true; render(); }); break;
+    case "pick": {
+      const t = el.dataset.tile;
+      if (S.phase === "handover" && (ui.dealing || S.handNumber === 0)) { ui.sel.has(t) ? ui.sel.delete(t) : ui.sel.size < 7 && ui.sel.add(t); render(); }
+      else if (S.phase === "handover") { ui.sel.has(t) ? ui.sel.delete(t) : ui.sel.size < S.oppCount && ui.sel.add(t); render(); }
+      else if (ui.picker === "my-draw") send(`move d${t}`);
+      else if (ui.picker === "opp-play") chooseTile(t, "opp");
+      break;
+    }
+    case "clear-sel": ui.sel.clear(); render(); break;
+    case "leader": ui.leader = +el.dataset.seat; render(); break;
+    case "start-hand": send(`hand ${[...ui.sel].join(" ")}${S.jockey > 0 ? "" : " lead " + ui.leader}`); break;
+    case "deal": ui.dealing = true; ui.sel.clear(); ui.leader = 0; render(); break;
+    case "cancel-deal": ui.dealing = false; render(); break;
+    case "rack": chooseTile(el.dataset.tile, "me"); break;
+    case "target": if (ui.pending) send(`move ${ui.pending.tile}${el.dataset.code}`); break;
+    case "my-draw": if (S.match) send("move d"); else { ui.picker = "my-draw"; render(); } break;
+    case "match": ui.choosingSeat = false; send(`match ${el.dataset.seat} ${Math.floor(Math.random() * 1e9)}`); break;
+    case "next": send("next"); break;
+    case "evalbar": ui.evalBar = !ui.evalBar; save(); renderTop(); renderBar(); analyze(); break;
+    case "arena-seat": ui.arenaCfg.ourSeat = +el.dataset.seat; save(); render(); break;
+    case "havi-version": ui.arenaCfg.version = el.dataset.v; save(); render(); break;
+    case "havi-ms": ui.arenaCfg.haviMs = +el.dataset.ms; save(); render(); break;
+    case "arena": ui.choosingSeat = false; ui.arenaPaused = false; send(`arena ${Math.floor(Math.random() * 1e9)}`); break;
+    case "arena-pause": ui.arenaPaused = true; clearTimeout(botTimer); renderActions(); break;
+    case "arena-resume": ui.arenaPaused = false; arenaStep(); break;
+    case "arena-step": ui.stepOnce = true; ui.arenaPaused = false; arenaStep(); break;
+    case "arena-speed": ui.arenaCfg.delay = +el.dataset.delay; save(); renderActions(); break;
+    case "series-run": startSeries(); render(); break;
+    case "series-stop": stopSeries(); render(); break;
+    case "series-games": ui.seriesGames = +el.dataset.n; render(); break;
+    case "hints": ui.hints = !ui.hints; save(); analyze(); break;
+    case "my-pass": send("move p"); break;
+    case "opp-play": ui.picker = "opp-play"; ui.pending = null; render(); break;
+    case "opp-draw": send("move d"); break;
+    case "opp-pass": send("move p"); break;
+    case "blocked": send("blocked"); break;
+    case "cancel": ui.picker = null; ui.pending = null; ui.error = ""; render(); break;
+    case "bid-step": ui.bid += +el.dataset.d; renderActions(); break;
+    case "bid": send(`move b${ui.bid}`); break;
+    case "bid-zero": send("move b0"); break;
+    case "accept": send("move a"); break;
+    case "play-move": if (S.phase === "bidding" || (S.phase === "play" && S.toMove === S.me)) send(`move ${el.dataset.n}`); break;
+    case "undo": send("undo"); break;
+    case "reveal": send(`reveal ${[...ui.sel].join(" ")}`).then((ok) => { if (ok) { ui.sel.clear(); render(); } }); break;
+    case "skip-reveal": ui.revealSkipped = true; ui.sel.clear(); render(); break;
+    case "level": ui.level = el.dataset.level; save(); analyze(); break;
+    case "record": ui.showRecord = !ui.showRecord; renderHistory(); break;
+    case "copy-record": {
+      const ta = $("record-text"), st = $("copy-status");
+      const done = () => { if (st) st.textContent = "Copied"; };
+      const fallback = () => { ta.focus(); ta.select(); if (st) st.textContent = "Selected. Press Ctrl+C to copy."; };
+      try { navigator.clipboard.writeText(ta.value).then(done, fallback); } catch (err) { fallback(); }
+      break;
+    }
+  }
+});
+document.addEventListener("keydown", (e) => {
+  if ((e.key === "Enter" || e.key === " ") && e.target.matches("g.slot.live")) { e.preventDefault(); e.target.dispatchEvent(new MouseEvent("click", { bubbles: true })); }
+});
+document.addEventListener("submit", (e) => {
+  if (!e.target.matches('[data-form="notation"]')) return;
+  e.preventDefault();
+  const v = $("notation-input").value.trim();
+  if (!v) return;
+  const w = v.split(/\s+/)[0].toLowerCase();
+  send(["undo", "blocked", "reveal", "pools"].includes(w) ? v : `move ${v}`);
+});
+
+// ------------------------------------------------------------ boot
+(async function boot() {
+  wasmBytes = Uint8Array.from(atob(WASM_B64), (c) => c.charCodeAt(0));
+  wasmModule = await WebAssembly.compile(wasmBytes);
+  engine = await makeEngine(wasmModule);
+  startWorker();
+  const saved = load();
+  if (saved && saved.level && LEVELS[saved.level]) ui.level = saved.level;
+  if (saved && saved.hints) ui.hints = true;
+  if (saved && saved.arenaCfg) {
+    Object.assign(ui.arenaCfg, saved.arenaCfg);
+    if (saved.arenaCfg.haviRev !== 2) { ui.arenaCfg.version = "current"; ui.arenaCfg.haviRev = 2; }  // default to the current HaviEngine once
+  }
+  if (saved && saved.evalBar) ui.evalBar = true;
+  log = saved && saved.log.length ? saved.log : EXAMPLE_LOG.slice();
+  ui.example = saved ? !!saved.example : true;
+  S = engine.cmd("state");
+  for (const c of log) { const r = engine.cmd(c); if (r.ok) S = r; }
+  if (S.started && S.phase === "handover" && S.handNumber === 0) ui.dealing = true;
+  if (NATIVE) setInterval(() => { fetch("/api/ping").catch(() => {}); }, 4000);
+  render(); analyze();
+})();
+</script>

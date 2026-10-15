@@ -1,0 +1,20 @@
+# Build output
+build/
+*.o
+*.obj
+*.pdb
+*.lib
+*.tmp*
+*.exe
+# Generated from gui/spectacular-bid.html by desktop/embed.py (2 MB)
+tools/gui_html.h
+# Training output (models, self-play data, logs) lives next to the exe
+training/
+training-quick/
+training2/
+desktop/training/
+# Editors / OS
+.vscode/
+.vs/
+.DS_Store
+Thumbs.db
