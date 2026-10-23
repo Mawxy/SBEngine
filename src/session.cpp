@@ -1,5 +1,7 @@
 #include "session.h"
 
+#include "met.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -180,6 +182,18 @@ std::string tiles_json(TileMask m) {
     return s + "]";
 }
 
+// Outcome probabilities from one player's side.
+std::string side_json(const Outcome& o) {
+    return "\"out\":" + num(o.out) + ",\"win\":" + num(o.win()) + ",\"tie\":" + num(o.tie) + ",\"oppOut\":" + num(o.opp_out) +
+           ",\"loss\":" + num(o.loss()) + ",\"game\":" + num(o.game);
+}
+
+// Hand outcome by seat, given Seat 1's side.
+std::string hand_json(const Outcome& s1) {
+    return "{\"s1Out\":" + num(s1.out) + ",\"s1Win\":" + num(s1.win()) + ",\"tie\":" + num(s1.tie) +
+           ",\"s2Win\":" + num(s1.loss()) + ",\"s2Out\":" + num(s1.opp_out) + ",\"s1Game\":" + num(s1.game) + "}";
+}
+
 std::string err_json(const std::string& e) { return "{\"ok\":false,\"error\":" + q(e) + "}"; }
 
 std::vector<std::string> split(const std::string& line) {
@@ -228,6 +242,14 @@ std::string Session::command(const std::string& line) {
         const unsigned long long seed = args.size() > 3 ? std::strtoull(args[3].c_str(), nullptr, 10) : 1;
         return analyze_json(dets, nodes, seed);
     }
+    if (cmd == "review") {
+        if (!started_ || hands_.empty()) return err_json("nothing to review");
+        const int dets = args.size() > 1 ? std::max(1, std::atoi(args[1].c_str())) : 32;
+        const long long nodes = args.size() > 2 ? std::max(100LL, std::atoll(args[2].c_str())) : 20000;
+        const unsigned long long seed = args.size() > 3 ? std::strtoull(args[3].c_str(), nullptr, 10) : 1;
+        return review_json(dets, nodes, seed);
+    }
+    if (cmd == "peek") return peek_json();
     if (cmd == "log") {
         std::string s = "{\"ok\":true,\"log\":[";
         for (size_t i = 0; i < log_.size(); ++i) s += (i ? "," : "") + q(log_[i]);
@@ -316,7 +338,8 @@ std::string Session::exec_match_start(const std::vector<std::string>& args) {
         view_.new_game();
         bot_view_ = View(1 - me_);
         bot_view_.new_game();
-        rng_.seed(args.size() > 2 ? std::strtoull(args[2].c_str(), nullptr, 10) : 1);
+        seed_ = args.size() > 2 ? std::strtoull(args[2].c_str(), nullptr, 10) : 1;
+        rng_.seed(seed_);
         game_ = Game();
         game_.new_game(rng_);
         hands_.clear();
@@ -531,6 +554,9 @@ std::string Session::state_json(int seat) const {
     s += ",\"toMove\":" + std::to_string(v.to_move() + 1);
     s += ",\"pools\":[" + std::to_string(v.pool(0)) + "," + std::to_string(v.pool(1)) + "]";
     s += ",\"jockey\":" + std::to_string(v.jockey() + 1);
+    // P(Seat 1 wins the game) from the table, as of the start of a hand with these pools.
+    s += ",\"metS1\":" + num(v.phase() == Phase::GameOver ? (v.winner() == 0 ? 1.0 : 0.0)
+                                                           : met_win(v.pool(0), v.pool(1), v.jockey() == 0 ? 0 : v.jockey() == 1 ? 1 : 2));
     s += ",\"winner\":" + std::to_string(v.winner() + 1);
     s += ",\"myHand\":" + tiles_json(v.my_hand());
     s += ",\"myPips\":" + std::to_string(pip_total(v.my_hand()));
@@ -631,10 +657,14 @@ std::string Session::analyze_json(int dets, long long nodes, unsigned long long 
         // Spectator: both hands are on show; only the boneyard order is unknown.
         if (game_.phase() == Phase::Bidding) {
             double s1 = 0, s2 = 0;
-            evaluate_spectator_bid(game_, p, s1, s2, &st);
-            s += ",\"kind\":\"bid\",\"spectator\":true,\"seat1Leads\":" + num(s1) + ",\"seat2Leads\":" + num(s2);
+            Outcome o1, o2;
+            evaluate_spectator_bid(game_, p, s1, s2, &st, &o1, &o2);
+            s += ",\"kind\":\"bid\",\"spectator\":true,\"seat1Leads\":" + num(s1) + ",\"seat2Leads\":" + num(s2) +
+                 ",\"hand1\":" + hand_json(o1) + ",\"hand2\":" + hand_json(o2);
         } else if (game_.phase() == Phase::Play) {
-            s += ",\"kind\":\"position\",\"spectator\":true,\"eval\":" + num(evaluate_spectator(game_, p, &st));
+            Outcome o;
+            const double e = evaluate_spectator(game_, p, &st, &o);
+            s += ",\"kind\":\"position\",\"spectator\":true,\"eval\":" + num(e) + ",\"hand\":" + hand_json(o);
         } else {
             return err_json("no position to evaluate");
         }
@@ -647,21 +677,29 @@ std::string Session::analyze_json(int dets, long long nodes, unsigned long long 
         const BidEval b = analyze_bid(v, p, &st);
         const double s1 = sgn * (me_ == 0 ? b.ev_i_lead : b.ev_opp_leads);
         const double s2 = sgn * (me_ == 0 ? b.ev_opp_leads : b.ev_i_lead);
+        // Outcomes for Seat 1 if Seat 1 leads / if Seat 2 leads.
+        const Outcome mine1 = me_ == 0 ? b.if_i_lead : b.if_i_lead.flipped();
+        const Outcome theirs1 = me_ == 0 ? b.if_opp_leads : b.if_opp_leads.flipped();
         s += ",\"kind\":\"bid\",\"seat1Leads\":" + num(s1) + ",\"seat2Leads\":" + num(s2) +
-             ",\"leadValue\":" + num(b.lead_value) + ",\"walkAway\":" + std::to_string(b.walk_away);
+             ",\"leadValue\":" + num(b.lead_value) + ",\"walkAway\":" + std::to_string(b.walk_away) +
+             ",\"hand1\":" + hand_json(me_ == 0 ? mine1 : theirs1) + ",\"hand2\":" + hand_json(me_ == 0 ? theirs1 : mine1);
         if (v.to_move() == me_) s += ",\"suggestion\":" + q(move_code(v.layout(), b.suggestion));
     } else if (v.phase() == Phase::Play) {
         if (v.to_move() == me_) {
             const auto moves = analyze_moves(v, p, &st);
-            s += ",\"kind\":\"moves\",\"eval\":" + num(sgn * moves.front().ev) + ",\"moves\":[";
+            const Outcome& o = moves.front().outcome;
+            s += ",\"kind\":\"moves\",\"eval\":" + num(sgn * moves.front().ev) +
+                 ",\"hand\":" + hand_json(me_ == 0 ? o : o.flipped()) + ",\"moves\":[";
             for (size_t i = 0; i < moves.size(); ++i) {
                 if (i) s += ',';
                 s += "{\"n\":" + q(move_code(v.layout(), moves[i].action)) + ",\"ev\":" + num(sgn * moves[i].ev) +
-                     ",\"se\":" + num(moves[i].se) + "}";
+                     ",\"se\":" + num(moves[i].se) + "," + side_json(moves[i].outcome) + "}";
             }
             s += "]";
         } else {
-            s += ",\"kind\":\"position\",\"eval\":" + num(sgn * evaluate_position(v, p, &st));
+            Outcome o;
+            const double e = evaluate_position(v, p, &st, &o);
+            s += ",\"kind\":\"position\",\"eval\":" + num(sgn * e) + ",\"hand\":" + hand_json(me_ == 0 ? o : o.flipped());
         }
     } else {
         return err_json("no decision to analyze");
@@ -672,11 +710,91 @@ std::string Session::analyze_json(int dets, long long nodes, unsigned long long 
     return s;
 }
 
+std::string Session::peek_json() const {
+    if (!match_ || hands_.empty()) return err_json("peek is for games the app deals");
+    std::string bone = "[";
+    TileMask seen = game_.hand(0) | game_.hand(1) | game_.layout().played();
+    for (TileMask m = kAllTiles & ~seen; m; m &= m - 1) bone += (bone.size() > 1 ? "," : "") + q(tile_code(first_tile(m)));
+    return "{\"ok\":true,\"hands\":[" + tiles_json(game_.hand(0)) + "," + tiles_json(game_.hand(1)) + "],\"boneyard\":" + bone + "]}";
+}
+
+std::string Session::review_json(int dets, long long nodes, unsigned long long seed) const {
+    // Grades the decision about to be made. Values from Seat 1's side (+ favors Seat 1);
+    // per-move probabilities from the mover's side; "hand" blocks by seat.
+    SearchParams p;
+    p.determinizations = dets;
+    p.nodes_per_det = nodes;
+    p.seed = seed;
+    const Phase ph = match_ ? game_.phase() : view_.phase();
+    if (ph != Phase::Play && ph != Phase::Bidding) return "{\"ok\":true,\"kind\":\"none\"}";
+    const int mover = match_ ? game_.to_move() : view_.to_move();
+    // The mover's own information: in games the app deals both seats have a view.
+    const View* mv = !match_ ? (mover == me_ ? &view_ : nullptr) : (mover == me_ ? &view_ : &bot_view_);
+    const double ms = mover == 0 ? 1.0 : -1.0;  // mover's side -> Seat 1's side
+    SearchStats st;
+    std::string s = "{\"ok\":true,\"mover\":" + std::to_string(mover + 1);
+
+    const auto moves_json = [&](const std::vector<MoveEval>& moves, const Layout& l) {
+        std::string m = "[";
+        for (size_t i = 0; i < moves.size(); ++i) {
+            if (i) m += ',';
+            m += "{\"n\":" + q(move_code(l, moves[i].action)) + ",\"ev\":" + num(ms * moves[i].ev) + ",\"se\":" + num(moves[i].se) +
+                 "," + side_json(moves[i].outcome) + "}";
+        }
+        return m + "]";
+    };
+    const auto seat1 = [&](const Outcome& o) { return mover == 0 ? o : o.flipped(); };
+
+    if (ph == Phase::Play) {
+        s += ",\"kind\":\"moves\"";
+        if (mv) {
+            const auto moves = analyze_moves(*mv, p, &st);
+            s += ",\"view\":{\"eval\":" + num(ms * moves.front().ev) + ",\"hand\":" + hand_json(seat1(moves.front().outcome)) +
+                 ",\"moves\":" + moves_json(moves, mv->layout()) + ",\"depth\":" + num(st.avg_depth) + "}";
+        } else {
+            // Table game, opponent to move: only my view exists.
+            Outcome o;
+            const double e = evaluate_position(view_, p, &st, &o);
+            const double sgn = me_ == 0 ? 1.0 : -1.0;
+            s += ",\"view\":{\"eval\":" + num(sgn * e) + ",\"hand\":" + hand_json(me_ == 0 ? o : o.flipped()) + ",\"seat\":" +
+                 std::to_string(me_ + 1) + "}";
+        }
+        if (match_) {
+            const auto moves = analyze_moves_spectator(game_, p, &st);
+            s += ",\"full\":{\"eval\":" + num(ms * moves.front().ev) + ",\"hand\":" + hand_json(seat1(moves.front().outcome)) +
+                 ",\"moves\":" + moves_json(moves, game_.layout()) + "}";
+        }
+    } else {
+        s += ",\"kind\":\"bid\"";
+        const View& bv = mv ? *mv : view_;
+        const BidEval b = analyze_bid(bv, p, &st);
+        const int bme = bv.me();
+        const double s1 = bme == 0 ? b.ev_i_lead : -b.ev_opp_leads;
+        const double s2 = bme == 0 ? b.ev_opp_leads : -b.ev_i_lead;
+        const Outcome h1 = bme == 0 ? b.if_i_lead : b.if_opp_leads.flipped();
+        const Outcome h2 = bme == 0 ? b.if_opp_leads : b.if_i_lead.flipped();
+        s += ",\"view\":{\"seat\":" + std::to_string(bme + 1) + ",\"seat1Leads\":" + num(s1) + ",\"seat2Leads\":" + num(s2) +
+             ",\"leadValue\":" + num(b.lead_value) + ",\"walkAway\":" + std::to_string(b.walk_away) + ",\"hand1\":" + hand_json(h1) +
+             ",\"hand2\":" + hand_json(h2);
+        if (bv.to_move() == bme) s += ",\"suggestion\":" + q(move_code(bv.layout(), b.suggestion));
+        s += "}";
+        if (match_) {
+            double f1 = 0, f2 = 0;
+            Outcome o1, o2;
+            evaluate_spectator_bid(game_, p, f1, f2, &st, &o1, &o2);
+            s += ",\"full\":{\"seat1Leads\":" + num(f1) + ",\"seat2Leads\":" + num(f2) + ",\"hand1\":" + hand_json(o1) +
+                 ",\"hand2\":" + hand_json(o2) + "}";
+        }
+    }
+    return s + ",\"dets\":" + std::to_string(dets) + "}";
+}
+
 std::string Session::record_text() const {
     if (!started_) return "";
     std::string s = "[Event \"Spectacular Bid\"]\n[Seat1 \"" + std::string(me_ == 0 ? "You" : match_ ? "Engine" : "Opponent") +
                     "\"]\n[Seat2 \"" + std::string(me_ == 1 ? "You" : match_ ? "Engine" : "Opponent") + "\"]\n[View \"" +
-                    std::to_string(me_ + 1) + "\"]\n";
+                    std::to_string(me_ + 1) + "\"]\n[Mode \"" + std::string(arena_ ? "arena" : match_ ? "match" : "table") + "\"]\n";
+    if (match_) s += "[Seed \"" + std::to_string(seed_) + "\"]\n";
     if (view_.phase() == Phase::GameOver) s += "[Result \"" + std::string(view_.winner() == 0 ? "1-0" : "0-1") + "\"]\n";
     for (const HandRec& h : hands_) {
         s += "\n" + h.header + "\n";

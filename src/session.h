@@ -13,6 +13,10 @@
 //   undo                               take back the last command
 //   state                              current state
 //   analyze [dets] [nodes] [seed]      engine analysis of the current position
+//   review [dets] [nodes] [seed]       grade the decision at the current position: the
+//                                      mover's view, and (games dealt by the app) the
+//                                      full view with both hands known
+//   peek                               (games dealt by the app) both hands and the boneyard
 //   record                             game record (.sbg text)
 //   log                                the command log (for replaying elsewhere)
 //
@@ -79,6 +83,8 @@ private:
     void replay();
     std::string state_json(int seat = 0) const;
     std::string analyze_json(int dets, long long nodes, unsigned long long seed) const;
+    std::string review_json(int dets, long long nodes, unsigned long long seed) const;
+    std::string peek_json() const;
     std::string record_text() const;
     std::string begin_match_hand();
     std::string exec_match_start(const std::vector<std::string>& args);
@@ -99,6 +105,7 @@ private:
     Game game_;
     View bot_view_{1};
     std::mt19937_64 rng_;
+    unsigned long long seed_ = 1;
 };
 
 }  // namespace sb

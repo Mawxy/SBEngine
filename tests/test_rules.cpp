@@ -7,6 +7,7 @@
 #include <numeric>
 #include <random>
 
+#include "../src/met.h"
 #include "../src/search.h"
 
 using namespace sb;
@@ -475,7 +476,142 @@ static void test_search_smoke() {
     CHECK(be.suggestion.kind == Action::Bid);
 }
 
+// The bot must never pay a bid that empties its own pool, and must accept a bid
+// that empties the opponent's (accepting wins the game on the spot).
+static void test_bid_no_bust() {
+    std::mt19937_64 rng(99);
+    SearchParams p;
+    p.determinizations = 8;
+    p.nodes_per_det = 2000;
+    for (int k = 0; k < 40; ++k) {
+        std::array<int8_t, kNumTiles> order;
+        for (int i = 0; i < kNumTiles; ++i) order[i] = static_cast<int8_t>(i);
+        portable_shuffle(order.data(), kNumTiles, rng);
+        const int low = 1 + k % 5;  // 1..5 chips
+        Game g;
+        g.set_jockey(0);
+        g.deal(order);
+        // Opener (seat 1) short on chips.
+        {
+            View v(1);
+            v.new_game();
+            v.set_jockey(0);
+            v.set_pools(30, low);
+            v.start_hand(g.hand(1), -1);
+            const BidEval be = analyze_bid(v, p);
+            CHECK(be.suggestion.kind == Action::Bid);
+            CHECK(v.bid_cost(1, be.suggestion.bid) < low);
+        }
+        // Jockey (seat 0) short on chips, facing an opening bid of 1.
+        {
+            View v(0);
+            v.new_game();
+            v.set_jockey(0);
+            v.set_pools(low, 30);
+            v.start_hand(g.hand(0), -1);
+            v.observe(1, Action::make_bid(1));
+            const BidEval be = analyze_bid(v, p);
+            CHECK(be.suggestion.kind == Action::Accept || v.bid_cost(0, be.suggestion.bid) < low);
+        }
+        // Jockey facing an opening bid that would cost the opener its last chips: accept.
+        {
+            View v(0);
+            v.new_game();
+            v.set_jockey(0);
+            v.set_pools(30, low);
+            v.start_hand(g.hand(0), -1);
+            v.observe(1, Action::make_bid(low));
+            CHECK(analyze_bid(v, p).suggestion.kind == Action::Accept);
+        }
+    }
+}
+
+static void test_outcomes() {
+    // Hand-end classification.
+    Snapshot snap;
+    snap.phase = Phase::HandOver;
+    snap.hand[0] = tile_bit(T(1, 0));
+    snap.hand[1] = tile_bit(T(6, 6));
+    Game g;
+    g.load(snap);
+    CHECK_EQ(classify_hand_end(g, 0), kOcWinOther);
+    CHECK_EQ(classify_hand_end(g, 1), kOcLossOther);
+    snap.hand[0] = tile_bit(T(0, 0));  // 0 pips vs 2
+    snap.hand[1] = tile_bit(T(1, 1));
+    g.load(snap);
+    CHECK_EQ(classify_hand_end(g, 0), kOcWinOther);
+    snap.hand[0] = 0;
+    g.load(snap);
+    CHECK_EQ(classify_hand_end(g, 0), kOcOut);
+    CHECK_EQ(classify_hand_end(g, 1), kOcOppOut);
+    snap.hand[0] = tile_bit(T(2, 0));
+    g.load(snap);
+    CHECK_EQ(classify_hand_end(g, 1), kOcTie);
+    const int8_t codes[4] = {kOcOut, kOcOut, kOcTie, kOcOppOut};
+    const Outcome o = outcome_from_codes(codes, 4);
+    CHECK(std::abs(o.out - 0.5) < 1e-9 && std::abs(o.tie - 0.25) < 1e-9 && std::abs(o.flipped().out - 0.25) < 1e-9);
+
+    // Move analysis reports probabilities that sum to 1; a move that goes out is certain.
+    Snapshot p2;
+    p2.phase = Phase::Play;
+    p2.to_move = 0;
+    p2.layout.play(T(6, 4), kTargetLead);
+    p2.hand[0] = tile_bit(T(4, 1));  // my last tile fits the 4 end
+    p2.hand[1] = tile_bit(T(5, 5)) | tile_bit(T(3, 3)) | tile_bit(T(2, 2));
+    for (int t : {T(0, 0), T(1, 0), T(2, 0)}) p2.boneyard.push_back(int8_t(t));
+    Game h;
+    h.load(p2);
+    SearchParams sp;
+    sp.determinizations = 4;
+    sp.nodes_per_det = 2000;
+    const auto ms = analyze_moves_spectator(h, sp);
+    CHECK_EQ(ms.size(), size_t(1));
+    CHECK(std::abs(ms[0].outcome.out - 1.0) < 1e-9);
+
+    // Live analysis from a real deal.
+    Game r;
+    r.set_pools(30, 30);
+    r.set_jockey(0);
+    r.deal(make_order({T(6, 4), T(1, 0), T(2, 0), T(3, 0), T(2, 1), T(3, 1), T(3, 2)},
+                      {T(5, 5), T(4, 1), T(5, 1), T(6, 1), T(4, 2), T(5, 2), T(6, 2)}));
+    View v(0);
+    v.new_game();
+    v.set_jockey(0);
+    v.start_hand(r.hand(0), -1);
+    v.observe(1, Action::make_bid(0));
+    sp.determinizations = 16;
+    sp.nodes_per_det = 3000;
+    for (const auto& m : analyze_moves(v, sp)) {
+        const Outcome& x = m.outcome;
+        CHECK(std::abs(x.out + x.win_other + x.tie + x.loss_other + x.opp_out - 1.0) < 1e-9);
+        CHECK(x.win() >= x.out && x.loss() >= x.opp_out);
+    }
+    Outcome po;
+    evaluate_position(v, sp, nullptr, &po);
+    CHECK(std::abs(po.win() + po.tie + po.loss() - 1.0) < 1e-9);
+    CHECK(po.game > 0 && po.game < 1);
+
+    // Match equity table: lost and won pools, symmetry, more chips is better.
+    CHECK(met_win(0, 5, 2) == 0.0 && met_win(5, 0, 2) == 1.0);
+    for (int a = 1; a <= 30; a += 7) {
+        CHECK(std::abs(met_win(a, a, 2) - 0.5) < 1e-4);
+        CHECK(std::abs(met_win(a, a, 0) + met_win(a, a, 1) - 1.0) < 1e-4);
+        if (a > 1) CHECK(met_win(a, 15, 2) >= met_win(a - 1, 15, 2));
+    }
+    Game over;
+    Snapshot so;
+    so.phase = Phase::HandOver;
+    so.pool = {12, 20};
+    so.jockey = 0;
+    so.hand[0] = 0;
+    so.hand[1] = tile_bit(T(1, 0));
+    over.load(so);
+    CHECK(std::abs(game_equity_after(over, 0) - met_win(12, 20, 0)) < 1e-9);
+}
+
 int main() {
+    test_outcomes();
+    test_bid_no_bust();
     test_view_inference();
     test_search_exact();
     test_search_smoke();

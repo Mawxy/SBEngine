@@ -6,7 +6,7 @@
 #   -> desktop/sbtrain.exe         (unattended training)
 set -e
 cd "$(dirname "$0")/.."
-ENGINE="src/layout.cpp src/game.cpp src/view.cpp src/search.cpp src/session.cpp src/nnue.cpp src/nnue_weights.cpp src/models.cpp"
+ENGINE="src/layout.cpp src/game.cpp src/view.cpp src/search.cpp src/session.cpp src/nnue.cpp src/nnue_weights.cpp src/models.cpp src/met.cpp src/met_table.cpp"
 python3 desktop/embed.py gui/spectacular-bid.html tools/gui_html.h
 python3 -m ziglang c++ -target x86_64-windows-gnu -std=c++20 -O2 -DSB_THREADS -DNDEBUG -Isrc \
   $ENGINE src/mlp.cpp tools/desktop.cpp \

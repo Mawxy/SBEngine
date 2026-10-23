@@ -1,5 +1,7 @@
 #include "models.h"
 
+#include "met.h"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -66,6 +68,11 @@ std::string load_models_from(const std::string& dir) {
         char buf[64];
         std::snprintf(buf, sizeof buf, ", info-set network (weight %.2f)", info_m.meta);
         sum += buf;
+    }
+    static MetTable met_t;
+    if (met_load(met_t, dir + sep + "met.txt")) {
+        met_active() = &met_t;
+        sum += ", match equity table";
     }
     M.description = sum;
     return sum;

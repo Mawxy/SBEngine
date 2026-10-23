@@ -55,11 +55,37 @@ struct SearchParams {
     void (*leaf_hook)(const Game&) = nullptr;
 };
 
+// How the hand ends, as probabilities from one player's side. Each sampled deal follows
+// its search's best line to the end of the hand (transposition-table moves, then a
+// greedy playout past the horizon) and records the result. These are probabilities
+// under chip-maximizing play by both sides, with the same PIMC optimism as the chip
+// values.
+struct Outcome {
+    double out = 0;         // I go out (domino)
+    double win_other = 0;   // I win a blocked hand, or the opponent runs out of chips first
+    double tie = 0;         // blocked hand with equal pips
+    double loss_other = 0;  // mirror of win_other
+    double opp_out = 0;     // the opponent goes out
+    double game = 0.5;      // I win the GAME: each line's end state looked up in the match equity table (met.h)
+    double win() const { return out + win_other; }
+    double loss() const { return opp_out + loss_other; }
+    Outcome flipped() const { return {opp_out, loss_other, tie, win_other, out, 1.0 - game}; }
+};
+
+// Outcome codes for one finished hand, from a player's side.
+enum OutcomeCode : int8_t { kOcOut = 0, kOcWinOther, kOcTie, kOcLossOther, kOcOppOut };
+// Classify a finished hand (phase HandOver or GameOver) for player p.
+int8_t classify_hand_end(const Game& c, int p);
+// P(player p wins the game) at a finished hand: 1/0 if the game is over, else the table.
+double game_equity_after(const Game& c, int p);
+Outcome outcome_from_codes(const int8_t* codes, int n, int stride = 1, const float* game = nullptr);
+
 struct MoveEval {
     Action action;
     double ev = 0;  // chips
     double se = 0;  // standard error across determinizations
     int n = 0;
+    Outcome outcome;  // for the player making the move
 };
 
 struct SearchStats {
@@ -73,6 +99,8 @@ struct BidEval {
     double ev_i_lead = 0;     // chips, rest of hand, if I lead
     double ev_opp_leads = 0;  // chips, rest of hand, if opponent leads
     double lead_value = 0;    // difference
+    Outcome if_i_lead;        // hand outcome for me if I lead (my best lead)
+    Outcome if_opp_leads;     // hand outcome for me if the opponent leads
     int walk_away = 0;        // highest bid worth reaching in a bidding war
     Action suggestion;
 };
@@ -85,6 +113,11 @@ public:
     // Values (centichips, for the player to move in g) of every action in `acts`,
     // by iterative deepening until solved or the node budget is spent.
     void root_values(const Game& g, const std::vector<Action>& acts, std::vector<int>& values);
+
+    // After root_values on a position: follow this search's best line from `after`
+    // (a child of that position) to the end of the hand and classify it for player p.
+    // Uses the transposition table's moves where it has them, then greedy play.
+    int8_t follow_line(Game after, int p, float* game = nullptr);
 
     int64_t nodes() const { return total_nodes_; }
     int last_depth() const { return last_depth_; }
@@ -129,14 +162,19 @@ BidEval analyze_bid(const View& v, const SearchParams& p, SearchStats* stats = n
 
 // Position evaluation in chips (rest of the hand, my point of view), whoever is
 // to move. Play phase only.
-double evaluate_position(const View& v, const SearchParams& p, SearchStats* stats = nullptr);
+double evaluate_position(const View& v, const SearchParams& p, SearchStats* stats = nullptr, Outcome* outcome = nullptr);
 
 // Spectator evaluation of a fully known deal (both hands visible, boneyard order
 // sampled), in chips from Seat 1's side. Play phase: the position value. Bidding:
 // the value if Seat 1 leads and if Seat 2 leads.
-double evaluate_spectator(const Game& g, const SearchParams& p, SearchStats* stats = nullptr);
+// `outcome` is from Seat 1's side.
+double evaluate_spectator(const Game& g, const SearchParams& p, SearchStats* stats = nullptr, Outcome* outcome = nullptr);
 void evaluate_spectator_bid(const Game& g, const SearchParams& p, double& seat1_leads, double& seat2_leads,
-                            SearchStats* stats = nullptr);
+                            SearchStats* stats = nullptr, Outcome* seat1_leads_outcome = nullptr,
+                            Outcome* seat2_leads_outcome = nullptr);
+// Spectator move ranking (both hands visible, boneyard order sampled) for the player to
+// move: values and outcomes from that player's side, best first. Play phase only.
+std::vector<MoveEval> analyze_moves_spectator(const Game& g, const SearchParams& p, SearchStats* stats = nullptr);
 
 // Engine decision for whatever phase the view is in (my turn).
 Action choose_action(const View& v, const SearchParams& p);

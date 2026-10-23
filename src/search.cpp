@@ -7,6 +7,7 @@
 #endif
 #include <cmath>
 #include "fail.h"
+#include "met.h"
 
 namespace sb {
 
@@ -207,6 +208,67 @@ void Searcher::root_values(const Game& g, const std::vector<Action>& acts, std::
     total_nodes_ += nodes_;
 }
 
+int8_t classify_hand_end(const Game& c, int p) {
+    const int o = 1 - p;
+    if (c.hand(p) == 0) return kOcOut;
+    if (c.hand(o) == 0) return kOcOppOut;
+    if (c.phase() == Phase::GameOver) return c.winner() == p ? kOcWinOther : kOcLossOther;
+    const int mp = pip_total(c.hand(p)), op = pip_total(c.hand(o));
+    return mp < op ? kOcWinOther : mp > op ? kOcLossOther : kOcTie;
+}
+
+double game_equity_after(const Game& c, int p) {
+    if (c.phase() == Phase::GameOver) return c.winner() == p ? 1.0 : 0.0;
+    const int o = 1 - p;
+    const int j = c.jockey() == p ? 0 : c.jockey() == o ? 1 : 2;
+    return met_win(c.pool(p), c.pool(o), j);
+}
+
+Outcome outcome_from_codes(const int8_t* codes, int n, int stride, const float* game) {
+    double cnt[5] = {0, 0, 0, 0, 0}, g = 0;
+    for (int i = 0; i < n; ++i) {
+        ++cnt[codes[static_cast<size_t>(i) * stride]];
+        if (game) g += game[static_cast<size_t>(i) * stride];
+    }
+    Outcome o;
+    if (n <= 0) return o;
+    if (game) o.game = g / n;
+    o.out = cnt[kOcOut] / n;
+    o.win_other = cnt[kOcWinOther] / n;
+    o.tie = cnt[kOcTie] / n;
+    o.loss_other = cnt[kOcLossOther] / n;
+    o.opp_out = cnt[kOcOppOut] / n;
+    return o;
+}
+
+int8_t Searcher::follow_line(Game c, int p, float* game) {
+    std::vector<Action> moves;
+    moves.reserve(32);
+    for (int guard = 0; guard < 256 && c.phase() == Phase::Play; ++guard) {
+        c.legal_actions(moves);
+        Action pick = moves[0];
+        if (moves.size() > 1) {
+            const uint64_t key = hash(c);
+            const TTEntry& e = tt_[key & tt_mask_];
+            bool found = false;
+            if (e.key == key && e.tile >= 0)
+                for (const Action& m : moves)
+                    if (m.kind == Action::Play && m.tile == e.tile && m.target == e.target) {
+                        pick = m;
+                        found = true;
+                        break;
+                    }
+            if (!found) {  // past the horizon: greedy (score now, else shed the heaviest tile)
+                order(c, moves, -1, -1);
+                pick = moves[0];
+            }
+        }
+        c.apply(pick);
+    }
+    if (game) *game = static_cast<float>(game_equity_after(c, p));
+    return classify_hand_end(c, p);
+}
+
 namespace {
 
 // Runs f(d, searcher) for every determinization d. With SB_THREADS (native desktop
@@ -269,6 +331,9 @@ std::vector<MoveEval> analyze_moves(const View& v, const SearchParams& p, Search
     const size_t n = root.size();
     const int D = p.determinizations;
     std::vector<std::vector<int>> per(D);
+    std::vector<int8_t> oc(static_cast<size_t>(D) * n);  // [d * n + i]
+    std::vector<float> ge(static_cast<size_t>(D) * n);
+    const int me = v.me();
 
     SearchStats st = run_dets(p, [&](int d, Searcher& s, DetResult& r) {
         std::mt19937_64 rng = det_rng(p, d);
@@ -278,6 +343,11 @@ std::vector<MoveEval> analyze_moves(const View& v, const SearchParams& p, Search
         const std::vector<Action> acts = g.legal_actions();
         if (acts != root) fail("analyze_moves: determinization changed my legal moves");
         s.root_values(g, acts, per[d]);
+        for (size_t i = 0; i < n; ++i) {
+            Game c = g;
+            c.apply(acts[i]);
+            oc[d * n + i] = s.follow_line(c, me, &ge[d * n + i]);
+        }
     });
 
     std::vector<MoveEval> out(n);
@@ -290,12 +360,12 @@ std::vector<MoveEval> analyze_moves(const View& v, const SearchParams& p, Search
         }
         const double mean = sum / D;
         const double var = std::max(0.0, sumsq / D - mean * mean);
-        out[i] = MoveEval{root[i], mean, std::sqrt(var / D), D};
+        out[i] = MoveEval{root[i], mean, std::sqrt(var / D), D, outcome_from_codes(oc.data() + i, D, static_cast<int>(n), ge.data() + i)};
     }
     // Information-set network: judge each play from what I can actually see, and blend
     // it with the PIMC value (which searches as if every tile were visible).
     if (p.info_model && p.info_weight > 0) {
-        const int me = v.me(), opp = v.opp();
+        const int opp = v.opp();
         for (auto& m : out) {
             if (m.action.kind != Action::Play) continue;
             View after = v;
@@ -318,19 +388,36 @@ BidEval analyze_bid(const View& v, const SearchParams& p, SearchStats* stats) {
     const int me = v.me(), opp = v.opp();
     const int D = p.determinizations;
     std::vector<std::vector<int>> mine(D);
+    std::vector<std::vector<int8_t>> mine_oc(D);
+    std::vector<std::vector<float>> mine_ge(D);
     std::vector<double> theirs(D);
+    std::vector<int8_t> theirs_oc(D);
+    std::vector<float> theirs_ge(D);
 
     SearchStats st = run_dets(p, [&](int d, Searcher& s, DetResult&) {
         std::mt19937_64 rng = det_rng(p, d);
         const Game g = v.determinize(rng);
         Game a = g;
         a.force_leader(me);
-        s.root_values(a, a.legal_actions(), mine[d]);
+        const std::vector<Action> leads = a.legal_actions();
+        s.root_values(a, leads, mine[d]);
+        mine_oc[d].resize(leads.size());
+        mine_ge[d].resize(leads.size());
+        for (size_t i = 0; i < leads.size(); ++i) {
+            Game c = a;
+            c.apply(leads[i]);
+            mine_oc[d][i] = s.follow_line(c, me, &mine_ge[d][i]);
+        }
         std::vector<int> vals;
         Game b = g;
         b.force_leader(opp);
-        s.root_values(b, b.legal_actions(), vals);
-        theirs[d] = -*std::max_element(vals.begin(), vals.end()) / 100.0;
+        const std::vector<Action> theirs_acts = b.legal_actions();
+        s.root_values(b, theirs_acts, vals);
+        const size_t bi = std::max_element(vals.begin(), vals.end()) - vals.begin();
+        theirs[d] = -vals[bi] / 100.0;
+        Game c = b;
+        c.apply(theirs_acts[bi]);
+        theirs_oc[d] = s.follow_line(c, me, &theirs_ge[d]);
     });
 
     BidEval r;
@@ -338,13 +425,27 @@ BidEval analyze_bid(const View& v, const SearchParams& p, SearchStats* stats) {
     // the deals first, then take the best (taking the best per deal would overrate the lead).
     const size_t n = mine[0].size();
     double best = -1e9;
+    size_t best_i = 0;
     for (size_t i = 0; i < n; ++i) {
         double sum = 0;
         for (int d = 0; d < D; ++d) sum += mine[d][i];
-        best = std::max(best, sum / D / 100.0);
+        if (sum / D / 100.0 > best) {
+            best = sum / D / 100.0;
+            best_i = i;
+        }
     }
     r.ev_i_lead = best;
     for (int d = 0; d < D; ++d) r.ev_opp_leads += theirs[d] / D;
+    {
+        std::vector<int8_t> codes(D);
+        std::vector<float> ge(D);
+        for (int d = 0; d < D; ++d) {
+            codes[d] = mine_oc[d][best_i];
+            ge[d] = mine_ge[d][best_i];
+        }
+        r.if_i_lead = outcome_from_codes(codes.data(), D, 1, ge.data());
+        r.if_opp_leads = outcome_from_codes(theirs_oc.data(), D, 1, theirs_ge.data());
+    }
     {
         const double mid = (r.ev_i_lead + r.ev_opp_leads) / 2;
         double half = (r.ev_i_lead - r.ev_opp_leads) / 2 * p.bid_calibration;
@@ -359,8 +460,15 @@ BidEval analyze_bid(const View& v, const SearchParams& p, SearchStats* stats) {
     }
     r.lead_value = r.ev_i_lead - r.ev_opp_leads;
 
+    // Paying a bid that empties your pool loses the game on the spot.
+    const auto busts = [&](int who, int b) {
+        const int c = v.bid_cost(who, b);
+        return c > 0 && c >= v.pool(who);
+    };
     // Highest bid b where winning at b is still at least as good as conceding at b-1.
+    // Never bid an amount that would bust me, and never outbid a bid that would bust them.
     for (int b = 1; b <= v.max_bid(me); ++b) {
+        if (busts(me, b) || (b > 1 && busts(opp, b - 1))) break;
         const double win_at_b = r.ev_i_lead - v.bid_cost(me, b);
         const double concede_prev = r.ev_opp_leads + v.bid_cost(opp, b - 1);
         if (win_at_b >= concede_prev) r.walk_away = b;
@@ -370,6 +478,8 @@ BidEval analyze_bid(const View& v, const SearchParams& p, SearchStats* stats) {
     if (v.to_move() == me) {
         if (v.high_bidder() < 0) {
             r.suggestion = Action::make_bid(r.walk_away);
+        } else if (busts(opp, v.current_bid())) {
+            r.suggestion = Action::accept();  // accepting makes them pay their last chips: I win
         } else {
             const int next = v.current_bid() + 1;
             r.suggestion = next <= r.walk_away ? Action::make_bid(next) : Action::accept();
@@ -379,59 +489,112 @@ BidEval analyze_bid(const View& v, const SearchParams& p, SearchStats* stats) {
     return r;
 }
 
-double evaluate_position(const View& v, const SearchParams& p, SearchStats* stats) {
+namespace {
+// Best root value of g for the player to move, and the outcome of its best line for player `side`.
+double best_root(Searcher& s, const Game& g, int side, int8_t& code, float& game) {
+    std::vector<int> vals;
+    const std::vector<Action> acts = g.legal_actions();
+    s.root_values(g, acts, vals);
+    const size_t bi = std::max_element(vals.begin(), vals.end()) - vals.begin();
+    Game c = g;
+    c.apply(acts[bi]);
+    code = s.follow_line(c, side, &game);
+    return vals[bi] / 100.0;
+}
+}  // namespace
+
+double evaluate_position(const View& v, const SearchParams& p, SearchStats* stats, Outcome* outcome) {
     if (v.phase() != Phase::Play) fail("evaluate_position: not in play");
     const int D = p.determinizations;
     std::vector<double> val(D);
+    std::vector<int8_t> oc(D);
+    std::vector<float> ge(D);
     SearchStats st = run_dets(p, [&](int d, Searcher& s, DetResult& r) {
         std::mt19937_64 rng = det_rng(p, d);
         bool ok = true;
         const Game g = v.determinize(rng, &ok);
         r.fallback = !ok;
-        std::vector<int> vals;
-        s.root_values(g, g.legal_actions(), vals);
-        const double best = *std::max_element(vals.begin(), vals.end()) / 100.0;
+        const double best = best_root(s, g, v.me(), oc[d], ge[d]);
         val[d] = g.to_move() == v.me() ? best : -best;
     });
     double sum = 0;
     for (double x : val) sum += x;
     if (stats) *stats = st;
+    if (outcome) *outcome = outcome_from_codes(oc.data(), D, 1, ge.data());
     return sum / D;
 }
 
-double evaluate_spectator(const Game& game, const SearchParams& p, SearchStats* stats) {
+double evaluate_spectator(const Game& game, const SearchParams& p, SearchStats* stats, Outcome* outcome) {
     if (game.phase() != Phase::Play) fail("evaluate_spectator: not in play");
     const int D = p.determinizations;
     std::vector<double> val(D);
+    std::vector<int8_t> oc(D);
+    std::vector<float> ge(D);
     SearchStats st = run_dets(p, [&](int d, Searcher& s, DetResult&) {
         std::mt19937_64 rng = det_rng(p, d);
         Game g = game;
         g.shuffle_boneyard(rng);
-        std::vector<int> vals;
-        s.root_values(g, g.legal_actions(), vals);
-        const double best = *std::max_element(vals.begin(), vals.end()) / 100.0;
+        const double best = best_root(s, g, 0, oc[d], ge[d]);
         val[d] = g.to_move() == 0 ? best : -best;
     });
     double sum = 0;
     for (double x : val) sum += x;
     if (stats) *stats = st;
+    if (outcome) *outcome = outcome_from_codes(oc.data(), D, 1, ge.data());
     return sum / D;
 }
 
-void evaluate_spectator_bid(const Game& game, const SearchParams& p, double& seat1_leads, double& seat2_leads,
-                            SearchStats* stats) {
+std::vector<MoveEval> analyze_moves_spectator(const Game& game, const SearchParams& p, SearchStats* stats) {
+    if (game.phase() != Phase::Play) fail("analyze_moves_spectator: not in play");
+    const std::vector<Action> root = game.legal_actions();
+    const size_t n = root.size();
     const int D = p.determinizations;
-    std::vector<double> a(D), b(D);
+    const int mover = game.to_move();
+    std::vector<std::vector<int>> per(D);
+    std::vector<int8_t> oc(static_cast<size_t>(D) * n);
+    std::vector<float> ge(static_cast<size_t>(D) * n);
     SearchStats st = run_dets(p, [&](int d, Searcher& s, DetResult&) {
         std::mt19937_64 rng = det_rng(p, d);
         Game g = game;
         g.shuffle_boneyard(rng);
-        std::vector<int> vals;
+        s.root_values(g, root, per[d]);
+        for (size_t i = 0; i < n; ++i) {
+            Game c = g;
+            c.apply(root[i]);
+            oc[d * n + i] = s.follow_line(c, mover, &ge[d * n + i]);
+        }
+    });
+    std::vector<MoveEval> out(n);
+    for (size_t i = 0; i < n; ++i) {
+        double sum = 0, sumsq = 0;
+        for (int d = 0; d < D; ++d) {
+            const double x = per[d][i] / 100.0;
+            sum += x;
+            sumsq += x * x;
+        }
+        const double mean = sum / D;
+        const double var = std::max(0.0, sumsq / D - mean * mean);
+        out[i] = MoveEval{root[i], mean, std::sqrt(var / D), D, outcome_from_codes(oc.data() + i, D, static_cast<int>(n), ge.data() + i)};
+    }
+    std::stable_sort(out.begin(), out.end(), [](const MoveEval& a, const MoveEval& b) { return a.ev > b.ev; });
+    if (stats) *stats = st;
+    return out;
+}
+
+void evaluate_spectator_bid(const Game& game, const SearchParams& p, double& seat1_leads, double& seat2_leads,
+                            SearchStats* stats, Outcome* seat1_leads_outcome, Outcome* seat2_leads_outcome) {
+    const int D = p.determinizations;
+    std::vector<double> a(D), b(D);
+    std::vector<int8_t> oa(D), ob(D);
+    std::vector<float> ga(D), gb(D);
+    SearchStats st = run_dets(p, [&](int d, Searcher& s, DetResult&) {
+        std::mt19937_64 rng = det_rng(p, d);
+        Game g = game;
+        g.shuffle_boneyard(rng);
         for (int leader = 0; leader < 2; ++leader) {
             Game x = g;
             x.force_leader(leader);
-            s.root_values(x, x.legal_actions(), vals);
-            const double best = *std::max_element(vals.begin(), vals.end()) / 100.0;
+            const double best = best_root(s, x, 0, (leader == 0 ? oa : ob)[d], (leader == 0 ? ga : gb)[d]);
             (leader == 0 ? a : b)[d] = leader == 0 ? best : -best;
         }
     });
@@ -440,6 +603,8 @@ void evaluate_spectator_bid(const Game& game, const SearchParams& p, double& sea
         seat1_leads += a[d] / D;
         seat2_leads += b[d] / D;
     }
+    if (seat1_leads_outcome) *seat1_leads_outcome = outcome_from_codes(oa.data(), D, 1, ga.data());
+    if (seat2_leads_outcome) *seat2_leads_outcome = outcome_from_codes(ob.data(), D, 1, gb.data());
     if (stats) *stats = st;
 }
 
