@@ -100,6 +100,9 @@ public:
     // Reorder the undrawn boneyard (spectator analysis: both hands known, draw order not).
     void shuffle_boneyard(std::mt19937_64& rng) { portable_shuffle(boneyard_.data() + bone_pos_, bone_end_ - bone_pos_, rng); }
     int last_drawn() const { return last_drawn_; }
+    // Make tile t the next one drawn (draws are random picks from what remains; the stored
+    // order is just one sample of them). Returns false if t is not in the boneyard.
+    bool set_next_draw(int t);
     int bone_pos() const { return bone_pos_; }
 
     // Test hooks.

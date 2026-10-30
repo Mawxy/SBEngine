@@ -9,6 +9,7 @@
 
 #include "../src/met.h"
 #include "../src/search.h"
+#include "../src/session.h"
 
 using namespace sb;
 
@@ -609,7 +610,132 @@ static void test_outcomes() {
     CHECK(std::abs(game_equity_after(over, 0) - met_win(12, 20, 0)) < 1e-9);
 }
 
+static bool has(const std::string& hay, const std::string& needle) { return hay.find(needle) != std::string::npos; }
+
+static void test_notation() {
+    // Directions from the recording seat: L R U D, S = the spinner's next side.
+    Session s;
+    CHECK(has(s.command("new 1"), "\"ok\":true"));
+    CHECK(has(s.command("hand 41 30 20 10 32 31 21 lead 2"), "\"ok\":true"));
+    CHECK(has(s.command("move 46"), "\"ok\":true"));       // opponent leads, as it lies: 4 left, 6 right
+    CHECK(has(s.command("move 41l"), "\"ok\":true"));      // me, on the 4 (shorthand for 41@L)
+    CHECK(has(s.command("move 11@L"), "\"ok\":true"));     // opponent: a double on the left end becomes the spinner
+    CHECK(has(s.command("state"), "\"dirs\":[\"R\"]"));  // the line now lies to the spinner's right
+    CHECK(has(s.command("move 10@U"), "\"ok\":false"));    // long sides fill first
+    CHECK(has(s.command("move 10s"), "\"ok\":true"));      // shorthand for 10@S: the spinner's next side, L
+    CHECK(has(s.command("state"), "\"dirs\":[\"R\",\"L\"]"));
+    CHECK(has(s.command("record"), "46 +10 41@L 11@L 10@L"));
+    // The older pip form still reads.
+    Session o;
+    o.command("new 1");
+    o.command("hand 41 30 20 10 32 31 21 lead 2");
+    o.command("move 64");
+    o.command("move 41@4");
+    o.command("move 11@1");
+    CHECK(has(o.command("move 10@s"), "\"ok\":true"));
+    CHECK(has(o.command("record"), "64 +10 41@R 11@R 10@R"));
+}
+
+// Expectimax reference: a forced draw is a random pick from what remains.
+static int brute_chance(const Game& g, const SearchParams& p) {
+    const int me = g.to_move(), op = 1 - me;
+    const auto leaf = [&](const Game& c, const Action& m) {
+        (void)m;
+        const int gain = 100 * ((g.pool(op) - c.pool(op)) - (g.pool(me) - c.pool(me)));
+        if (c.phase() != Phase::Play) {
+            int v = gain;
+            if (c.phase() == Phase::GameOver) v += c.winner() == me ? int(p.win_value * 100) : -int(p.win_value * 100);
+            else if (c.last_hand_end() == HandEnd::Domino) v += c.jockey() == me ? int(p.jockey_value * 100) : -int(p.jockey_value * 100);
+            return v;
+        }
+        return c.to_move() == me ? gain + brute_chance(c, p) : gain - brute_chance(c, p);
+    };
+    const auto acts = g.legal_actions();
+    if (acts.size() == 1 && acts[0].kind == Action::Draw && g.boneyard_size() > 1) {
+        long long sum = 0;
+        int n = 0;
+        for (TileMask m = g.boneyard_mask(); m; m &= m - 1) {
+            Game c = g;
+            c.set_next_draw(first_tile(m));
+            c.apply(acts[0]);
+            sum += leaf(c, acts[0]);
+            ++n;
+        }
+        return static_cast<int>(sum / n);
+    }
+    int best = -1000000000;
+    for (const Action& m : acts) {
+        Game c = g;
+        c.apply(m);
+        best = std::max(best, leaf(c, m));
+    }
+    return best;
+}
+
+static void test_chance_draws() {
+    // With chance draws on, the search must match expectimax exactly on small positions.
+    SearchParams p;
+    p.nodes_per_det = 10'000'000;
+    p.max_depth = 80;
+    p.jockey_value = 1.5;
+    p.chance_draws = true;
+    p.chance_max = 8;
+    p.chance_taper = false;
+    p.eval.nn = nullptr;
+    Searcher s(p, 16);
+    std::mt19937_64 rng(7);
+    int exact = 0, with_draws = 0;
+    for (int i = 0; i < 200; ++i) {
+        std::array<int8_t, kNumTiles> o;
+        std::iota(o.begin(), o.end(), int8_t{0});
+        std::shuffle(o.begin(), o.end(), rng);
+        Snapshot snap;
+        snap.phase = Phase::Play;
+        snap.to_move = int(rng() % 2);
+        snap.pool = {30, 30};
+        for (int k = 0; k < 4; ++k) {
+            snap.hand[0] |= tile_bit(o[k]);
+            snap.hand[1] |= tile_bit(o[4 + k]);
+        }
+        for (int k = 0; k < 4; ++k) snap.boneyard.push_back(o[8 + k]);
+        snap.layout.play(o[12], kTargetLead);
+        Game g;
+        g.load(snap);
+        const auto acts = g.legal_actions();
+        std::vector<int> vals;
+        s.root_values(g, acts, vals);
+        exact += s.last_exact();
+        int best = -1000000000;
+        for (int v : vals) best = std::max(best, v);
+        CHECK_EQ(best, brute_chance(g, p));
+        with_draws += acts.size() == 1 && acts[0].kind == Action::Draw;
+    }
+    CHECK_EQ(exact, 200);
+    CHECK(with_draws > 5);
+}
+
+static void test_table_both_hands() {
+    // A table game with both hands entered keeps the full game and settles hands itself.
+    Session s;
+    s.command("new 1");
+    CHECK(has(s.command("hand 00 10 31 43 62 64 66 opp 20 22 50 53 54 55 61 lead 2"), "\"ok\":false"));  // 66 leads: Seat 1's
+    CHECK(has(s.command("hand 00 10 31 43 62 64 66 opp 20 22 50 53 54 55 61 lead 1"), "\"full\":true"));
+    CHECK(has(s.command("move 66"), "\"ok\":true"));
+    CHECK(has(s.command("move 22"), "\"ok\":false"));          // not in the opponent's hand... and doesn't fit
+    CHECK(has(s.command("move 61l"), "\"ok\":true"));
+    CHECK(has(s.command("move 10l"), "\"ok\":true"));
+    CHECK(has(s.command("move d66"), "\"ok\":false"));         // not in the boneyard
+    const std::string st = s.command("state");
+    CHECK(has(st, "\"boneyardTiles\""));
+    CHECK(has(s.command("review 4 1000"), "\"full\":{"));
+    CHECK(has(s.command("record"), "h2: 20 22 50 53 54 55 61"));
+    CHECK(has(s.command("move d"), "can still play"));           // with both hands known, an impossible draw is caught
+}
+
 int main() {
+    test_table_both_hands();
+    test_chance_draws();
+    test_notation();
     test_outcomes();
     test_bid_no_bust();
     test_view_inference();

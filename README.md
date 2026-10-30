@@ -39,6 +39,8 @@ The search takes after Stockfish, adapted for hidden tiles. Stockfish searches o
 
 **Game odds:** chips only matter for winning the game, so every move and position also gets P(win the game). Pools only go down (chips won go to a trophy pile that is never spent), so the game is a walk from 30-30 toward 0. `tools/sbequity.cpp` plays self-play hands at 30-30, records what each seat paid and who ends up jockey, and solves the whole game by dynamic programming into a **match equity table**: P(win) from the start of a hand for every pair of pools and jockey state (`src/met.h`, built in as `src/met_table.cpp`). Each search sample's line ends in a pool state, and the table turns that into a game win chance; averaging over samples gives the move's game odds. A `met.txt` in the models folder replaces the built-in table. For now the engine still *chooses* moves by chips; game odds are reported, not yet played for.
 
+**All tiles visible (omniscient read):** with both hands known (games the app deals, or table games where both hands and every draw's tile are entered), the engine also evaluates the position as if all tiles were face up. Draws stay random: the search treats a draw as a chance event and averages over the tiles left in the boneyard (all of them at the first draw on a line, fewer at later ones, with the sampled deals covering the rest). It never plans around which tile comes next.
+
 **Known limitation:** inside one sample the search knows the opponent's tiles and the draw order (strategy fusion). Averaging over samples and the information-set network reduce this but don't remove it.
 
 ## Ways to use it

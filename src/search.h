@@ -18,6 +18,7 @@
 // opponent's tiles and the draw order (strategy fusion). Averaging over many
 // samples is the standard mitigation; information-set search can replace it later.
 
+#include <algorithm>
 #include <cstdint>
 #include <random>
 #include <vector>
@@ -49,6 +50,16 @@ struct SearchParams {
     const Mlp* info_model = models().info;  // blended into root move values
     float info_weight = models().info_weight;
     EvalParams eval;
+    // Draws as chance events: a draw is a random pick from the tiles left in the boneyard,
+    // so the search averages over them instead of following one sampled order (which lets
+    // it plan around tiles nobody can know are coming). Each chance draw costs one ply.
+    // Up to chance_max tiles are tried per draw (all of them when fewer remain).
+    // Tiles tried at the first chance draw on a line, then fewer at each later one
+    // (chance_max, then 3, then 2); past that a draw just takes the sampled next tile.
+    // The determinizations average over those later draws instead.
+    bool chance_draws = false;
+    int chance_max = 6;
+    bool chance_taper = true;  // false: chance_max tiles at every chance draw (exact expectimax when it covers them all)
     uint64_t seed = 1;
     // Training only (sbtrain): called with every position the search evaluates at its
     // horizon, i.e. exactly the positions where the NNUE decides a value. Null in play.
@@ -134,6 +145,13 @@ private:
     };
 
     int negamax(const Game& g, int depth, int alpha, int beta, int ply);
+    // Value of a forced draw for the player to move, averaged over the tiles it could be.
+    int chance_value(const Game& g, int depth, int ply);
+    int chance_width() const {
+        if (!p_.chance_taper) return p_.chance_max;
+        const int w = chance_depth_ == 0 ? p_.chance_max : chance_depth_ == 1 ? 3 : chance_depth_ == 2 ? 2 : 1;
+        return std::min(w, p_.chance_max);
+    }
     int child_value(const Game& g, const Game& c, const Action& m, int depth, int alpha, int beta, int ply);
     int terminal(const Game& c, int p) const;
     int evaluate(const Game& g) const;
@@ -144,6 +162,7 @@ private:
     std::vector<TTEntry> tt_;
     uint64_t tt_mask_;
     uint64_t salt_ = 0;
+    int chance_depth_ = 0;  // chance draws above the current node
     int64_t nodes_ = 0;
     int64_t total_nodes_ = 0;
     int64_t hard_limit_ = 0;

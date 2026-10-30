@@ -412,7 +412,7 @@ let wasmBytes, wasmModule, engine, worker = null, workerBusy = false, jobId = 0,
 let log = [], S = null;
 const ui = {
   example: false, dealing: false, choosingSeat: false, picker: null, pending: null,
-  sel: new Set(), leader: 0, bid: 3, level: "standard", analysis: null, error: "", info: "",
+  sel: new Set(), oppSel: new Set(), dealWho: "me", leader: 0, bid: 3, level: "standard", analysis: null, error: "", info: "",
   showRecord: false, revealSkipped: false, hints: false, botThinking: false,
   arenaCfg: { ourSeat: 1, version: "current", haviRev: 2, haviMs: 1000, delay: 700 }, arenaPaused: false, thinkingSeat: 0,
   series: null, seriesGames: 10, evalBar: false, barEval: null, barLabel: "",
@@ -495,7 +495,7 @@ async function send(c) {
   log = engine.cmd("log").log;
   S = r;
   ui.error = ""; ui.info = ""; ui.pending = null; ui.picker = null;
-  if (w === "hand" || w === "match" || w === "next") { ui.dealing = false; ui.sel.clear(); ui.revealSkipped = false; }
+  if (w === "hand" || w === "match" || w === "next") { ui.dealing = false; ui.sel.clear(); ui.oppSel.clear(); ui.dealWho = "me"; ui.revealSkipped = false; }
   save(); render(); analyze();
   return true;
 }
@@ -704,9 +704,10 @@ function buildBoard(L) {
     slots.push({ x: -s, y: -s / 2, w: 2 * s, h: s, code: "", label: "lead" });
     return { items, slots };
   }
-  const dirs = ["L", "R", "U", "D"];
+  // Each arm points the way it lies on the table (L, R, U, D, from the recording seat).
+  const dirs = L.dirs || ["L", "R", "U", "D"];
   const front = L.center ? { L: -s, R: s, U: -s / 2, D: s / 2 } : { L: -s / 2, R: s / 2, U: -s, D: s };
-  if (L.center) items.push({ x: -s, y: -s / 2, a: +L.center[0], b: +L.center[1], o: "h", t: L.center });
+  if (L.center) items.push({ x: -s, y: -s / 2, a: +L.center[L.flip ? 1 : 0], b: +L.center[L.flip ? 0 : 1], o: "h", t: L.center });
   else items.push({ x: -s / 2, y: -s, a: +L.spinner[0], b: +L.spinner[0], o: "v", t: L.spinner, spinner: true });
   L.arms.forEach((arm, i) => {
     const d = dirs[i];
@@ -728,12 +729,12 @@ function buildBoard(L) {
     }
   });
   for (const e of L.ends) {
-    const d = dirs[e.spinner ? e.slot : e.arm];
+    const d = e.dir || dirs[e.arm];
     const horiz = d === "L" || d === "R";
     const w = horiz ? 2 * s : s, h = horiz ? s : 2 * s;
     const x = d === "L" ? front.L - w - 6 : d === "R" ? front.R + 6 : -w / 2;
     const y = d === "U" ? front.U - h - 6 : d === "D" ? front.D + 6 : -h / 2;
-    slots.push({ x, y, w, h, code: e.code, label: e.code + (e.spinner ? " ✦" : "") });
+    slots.push({ x, y, w, h, code: e.code, label: e.code.slice(1) + " " + e.pip });
   }
   return { items, slots };
 }
@@ -809,10 +810,10 @@ function myLegalByTile() {
 function renderRack() {
   const w = $("rackwrap");
   const pk = RP && RP.peeks[RP.pos];
-  if ((S && S.arena) || pk) {
+  if ((S && S.arena) || pk || (S && S.full && !RP)) {
     const nx = RP ? rpNext(RP.pos) : null, nt = nx && /^\d\d/.test(nx.n) ? nx.n.slice(0, 2) : "";
     w.innerHTML = [1, 2].map((seat) => {
-      const tiles = pk ? pk.hands[seat - 1] : S.hands[seat - 1];
+      const tiles = pk ? pk.hands[seat - 1] : S.hands[seat - 1];  // arena, replay, or a table game with both hands
       const pips = tiles.reduce((a, t) => a + +t[0] + +t[1], 0);
       return `<div class="arena-rack" style="--c: var(${seatVar(seat)})"><div class="rack-label"><b style="color: var(--c)">${seatName(seat)}</b> · Seat ${seat} · <b class="num">${pips}</b> pips${ui.thinkingSeat === seat ? ' <span class="thinking"><i></i>thinking</span>' : ""}</div>
         <div class="rack">${tiles.slice().reverse().map((t) => `<span class="rtile ${nx && nx.seat === seat && t === nt ? "next" : ""}">${tileIcon(t, "v")}</span>`).join("") || '<span class="hint">out</span>'}</div></div>`;
@@ -898,13 +899,16 @@ function renderActions() {
   }
 
   if (ph === "handover" && (S.handNumber === 0 || ui.dealing)) {
-    const n = ui.sel.size;
+    const n = ui.sel.size, no = ui.oppSel.size, opp = ui.dealWho === "opp";
     const bidding = S.jockey > 0;
-    h += `<h2>Deal hand ${S.handNumber + 1}<small>${n} of 7 tiles</small></h2>
-      <p>Tap your seven tiles.${bidding ? ` ${seatName(S.jockey)} dominoed last hand, so this hand opens with bidding.` : " Then pick who holds the forced lead (highest double, or heaviest tile if no doubles)."}</p>
-      ${pickerHTML({ isAvail: () => true, isSel: (t) => ui.sel.has(t) })}`;
+    const mineSet = opp ? ui.oppSel : ui.sel, otherSet = opp ? ui.sel : ui.oppSel;
+    h += `<h2>Deal hand ${S.handNumber + 1}<small>${n} of 7 tiles${no ? ` · opponent ${no} of 7` : ""}</small></h2>
+      <p>Tap ${opp ? "the opponent's" : "your"} seven tiles.${bidding ? ` ${seatName(S.jockey)} dominoed last hand, so this hand opens with bidding.` : " Then pick who holds the forced lead (highest double, or heaviest tile if no doubles)."}</p>
+      <div class="row"><span class="hint">Entering</span><button class="btn small ${opp ? "" : "on"}" data-act="deal-who" data-who="me">Your tiles</button><button class="btn small ${opp ? "on" : ""}" data-act="deal-who" data-who="opp">Opponent's tiles (optional)</button></div>
+      ${opp ? `<p class="hint">With both hands entered, the engine also gives an all-tiles-visible read, grades the opponent's moves, and settles each hand itself. Enter the tile on each of their draws.</p>` : ""}
+      ${pickerHTML({ isAvail: (t) => !otherSet.has(t), isSel: (t) => mineSet.has(t) })}`;
     if (!bidding) h += `<div class="row"><span class="hint">Forced lead:</span><button class="btn small ${ui.leader === S.me ? "on" : ""}" data-act="leader" data-seat="${S.me}">Me</button><button class="btn small ${ui.leader === 3 - S.me ? "on" : ""}" data-act="leader" data-seat="${3 - S.me}">Opponent</button></div>`;
-    h += `<div class="row"><button class="btn primary" data-act="start-hand" ${n === 7 && (bidding || ui.leader) ? "" : "disabled"}>Start hand</button>${n ? '<button class="btn" data-act="clear-sel">Clear</button>' : ""}${S.handNumber ? '<button class="btn" data-act="cancel-deal">Back</button>' : ""}</div>`;
+    h += `<div class="row"><button class="btn primary" data-act="start-hand" ${n === 7 && (no === 0 || no === 7) && (bidding || ui.leader) ? "" : "disabled"}>Start hand</button>${n || no ? '<button class="btn" data-act="clear-sel">Clear</button>' : ""}${S.handNumber ? '<button class="btn" data-act="cancel-deal">Back</button>' : ""}</div>`;
     el.innerHTML = h; return;
   }
 
@@ -955,7 +959,13 @@ function renderActions() {
   // play phase
   const mine = S.toMove === S.me;
   if (ui.picker === "my-draw") {
-    h += `<h2>Which tile did you draw?</h2>${pickerHTML({ isAvail: (t) => S.unknown.includes(t) })}<div class="row"><button class="btn" data-act="cancel">Cancel</button></div>`;
+    h += `<h2>Which tile did you draw?</h2>${pickerHTML({ isAvail: (t) => S.full ? S.boneyardTiles.includes(t) : S.unknown.includes(t) })}<div class="row"><button class="btn" data-act="cancel">Cancel</button></div>`;
+    el.innerHTML = h; return;
+  }
+  if (ui.picker === "opp-draw") {
+    h += `<h2>Which tile did the opponent draw?</h2>${pickerHTML({ isAvail: (t) => S.boneyardTiles.includes(t) })}
+      <div class="row"><button class="btn" data-act="opp-draw-unknown">Didn't see it</button><button class="btn" data-act="cancel">Cancel</button></div>
+      <p class="hint">Without the tile the engine stops tracking both hands for the rest of this hand.</p>`;
     el.innerHTML = h; return;
   }
   if (ui.picker === "opp-play") {
@@ -963,7 +973,7 @@ function renderActions() {
     const fits = (t) => (S.layout.count === 0 && !S.layout.center && !S.layout.spinner) || ends.some((e) => fitsPip(t, e.pip));
     const excl = new Set(S.excluded);
     h += `<h2>Which tile did the opponent play?</h2>
-      ${pickerHTML({ isAvail: (t) => S.unknown.includes(t), fits, excl: (t) => excl.has(t) })}
+      ${pickerHTML({ isAvail: (t) => (S.full ? S.hands[2 - S.me].includes(t) : S.unknown.includes(t)), fits, excl: (t) => excl.has(t) })}
       <div class="legend"><span><i style="background: var(--good-soft)"></i>fits an open end</span><span><i style="background: var(--bad)"></i>engine thought they could not hold it</span></div>
       <div class="row"><button class="btn" data-act="cancel">Cancel</button></div>`;
     el.innerHTML = h; return;
@@ -985,7 +995,7 @@ function renderActions() {
         ${canPass ? '<button class="btn" data-act="blocked">Hand is blocked</button>' : ""}
         <button class="btn" data-act="undo">Undo</button>
       </div>
-      ${notationBox("41@4, d32 or p")}`;
+      ${notationBox("41r, d32 or p")}`;
   } else {
     if (S.match) {
       h += `<h2>Engine's move</h2><p><span class="thinking"><i></i>Thinking</span></p>`;
@@ -999,7 +1009,7 @@ function renderActions() {
         ${canPass ? '<button class="btn" data-act="opp-pass">Passed</button><button class="btn" data-act="blocked">Hand is blocked</button>' : ""}
         <button class="btn" data-act="undo">Undo</button>
       </div>
-      ${notationBox("53@s, d or p")}`;
+      ${notationBox("53l, d or p")}`;
   }
   el.innerHTML = h;
 }
@@ -1043,6 +1053,7 @@ function renderEngine() {
       ${bar(A.seat1Leads)}${bar(A.seat2Leads)}
       <table class="moves"><tr><td>Lead is worth to you</td><td class="v num">${A.leadValue.toFixed(2)} chips</td></tr><tr><td>Your walk-away bid</td><td class="v num">${A.walkAway}</td></tr></table>
       ${handHTML(A.hand1, "If Seat 1 leads")}${handHTML(A.hand2, "If Seat 2 leads")}
+      ${A.full && A.full.seat1Leads != null ? `<div class="card"><h3>All tiles visible</h3><div class="evalhead">${evnum(A.full.seat1Leads, true)}<span class="hint">if Seat 1 leads</span></div><div class="evalhead">${evnum(A.full.seat2Leads, true)}<span class="hint">if Seat 2 leads</span></div>${handHTML(A.full.hand1, "If Seat 1 leads")}${handHTML(A.full.hand2, "If Seat 2 leads")}</div>` : ""}
       ${A.suggestion && mineToAct ? `<div class="row"><span>Suggested:</span><button class="btn primary mono" data-act="play-move" data-n="${esc(A.suggestion)}">${esc(A.suggestion === "b0" ? "pass (b0)" : A.suggestion === "a" ? "accept" : A.suggestion)}</button></div>` : ""}
       <p class="hint">Chips for the rest of this hand. + favors Seat 1, − favors Seat 2.</p>
       ${status}`;
@@ -1050,6 +1061,7 @@ function renderEngine() {
     const ev = A.eval;
     h += `<div class="evalhead">${evnum(ev)}<span class="hint">${favors(ev)}</span></div>${bar(ev)}
       <p class="hint">Chips expected over the rest of this hand. + favors Seat 1, − favors Seat 2.</p>${handHTML(A.hand)}`;
+    if (A.full && A.full.eval != null) h += `<div class="card"><h3>All tiles visible</h3><div class="evalhead">${evnum(A.full.eval, true)}<span class="hint">${favors(A.full.eval)}</span></div>${handHTML(A.full.hand)}<p class="hint">Both hands known; draws are random picks from the boneyard.</p></div>`;
     if (A.kind === "moves") {
       const good = (v) => (S.me === 1 ? v : -v);
       const best = good(A.moves[0].ev), worst = good(A.moves[A.moves.length - 1].ev);
@@ -1150,7 +1162,7 @@ async function startReplay(fullLog, fromFile) {
     }
     logOut.push(c);
     states.push(r);
-    peeks.push(r.match && r.handNumber > 0 ? eng.cmd("peek") : null);
+    peeks.push((r.match || r.full) && r.handNumber > 0 ? eng.cmd("peek") : null);
   }
   const log2 = logOut, n = log2.length;
   const isMove = (c) => /^move\s/.test(c);
@@ -1195,7 +1207,7 @@ function rpNext(L) {
   if (!at) return null;
   const hd = RP.full.history[at.h], m = hd && hd.moves[at.k];
   if (!m) return null;
-  return { seat: m.seat, n: m.n, key: /^d/.test(m.n) ? "d" : m.n, pts: m.pts };
+  return { seat: m.seat, n: m.n, key: m.k || (/^d/.test(m.n) ? "d" : m.n), pts: m.pts };
 }
 // Chips the played move gave up against the engine's choice, from the mover's side.
 function rpGrade(L, which = "view") {
@@ -1342,7 +1354,7 @@ function rpEngineHTML() {
         <div class="evalhead">${evnum(V.seat2Leads, true)}<span class="hint">if Seat 2 leads</span></div>
         <table class="moves"><tr><td>Lead is worth</td><td class="v num">${V.leadValue.toFixed(2)}</td></tr><tr><td>Walk-away bid</td><td class="v num">${V.walkAway}</td></tr></table>
         ${handHTML(V.hand1, "If Seat 1 leads")}${handHTML(V.hand2, "If Seat 2 leads")}</div>
-      ${F ? `<div class="card"><h3>Full view</h3>
+      ${F ? `<div class="card"><h3>All tiles visible</h3>
         <div class="evalhead">${evnum(F.seat1Leads, true)}<span class="hint">if Seat 1 leads</span></div>
         <div class="evalhead">${evnum(F.seat2Leads, true)}<span class="hint">if Seat 2 leads</span></div>
         ${handHTML(F.hand1, "If Seat 1 leads")}${handHTML(F.hand2, "If Seat 2 leads")}</div>` : ""}</div>
@@ -1359,7 +1371,7 @@ function rpEngineHTML() {
     h += `<p>${esc(mv)} to move. Only Seat ${V.seat}'s view is known in this game, so this is that seat's read of the position.</p>`;
   }
   h += `<div class="cards"><div class="card"><h3>${V.moves ? `Seat ${mover}'s view` : `Seat ${V.seat}'s view`}</h3><div class="evalhead">${evnum(V.eval)}</div>${handHTML(V.hand)}</div>
-    ${F ? `<div class="card"><h3>Full view</h3><div class="evalhead">${evnum(F.eval)}</div>${handHTML(F.hand)}</div>` : ""}</div>`;
+    ${F ? `<div class="card"><h3>All tiles visible</h3><div class="evalhead">${evnum(F.eval)}</div>${handHTML(F.hand)}</div>` : ""}</div>`;
   if (V.moves) {
     const full = {};
     if (F) for (const m of F.moves) full[m.n] = m;
@@ -1383,11 +1395,12 @@ function recordToLog(text) {
     if (!line) continue;
     let m;
     if ((m = line.match(/^\[(\w+)\s+"([^"]*)"\]$/))) { tags[m[1]] = m[2]; continue; }
-    if ((m = line.match(/^#(\d+)\s+(jockey|lead)\s+([12])/))) { cur = { n: +m[1], kind: m[2], seat: +m[3], hand: null, moves: [], end: "", reveal: null }; hands.push(cur); continue; }
+    if ((m = line.match(/^#(\d+)\s+(jockey|lead)\s+([12])/))) { cur = { n: +m[1], kind: m[2], seat: +m[3], hs: {}, moves: [], end: "", reveal: null }; hands.push(cur); continue; }
     if (!cur) continue;
-    if ((m = line.match(/^h([12]):\s*(.*)$/))) { cur.hand = m[2].trim().split(/\s+/); continue; }
+    if ((m = line.match(/^h([12]):\s*(.*)$/))) { cur.hs[+m[1]] = m[2].trim().split(/\s+/); continue; }
     if ((m = line.match(/^r([12]):\s*(.*)$/))) { cur.reveal = m[2].trim().split(/\s+/).filter(Boolean); continue; }
     if (/^(end\b|game over)/i.test(line)) { cur.end = line; continue; }  // a game can end mid-hand with no domino or block
+    if (/^score\b/i.test(line)) continue;  // pools after the hand and chips won in it: informational
     cur.moves.push(...line.split(/\s+/).filter((t) => t && !/^\+\d+$/.test(t)));
   }
   if (!hands.length) return { error: "No hands found. Paste a game record (.sbg), the text from Record in the game log." };
@@ -1399,8 +1412,9 @@ function recordToLog(text) {
   }
   log.push(`new ${view}`);
   for (const h of hands) {
-    if (!h.hand || h.hand.length !== 7) return { error: `Hand ${h.n} needs an h${view}: line with seven tiles.` };
-    log.push(`hand ${h.hand.join(" ")}${h.kind === "lead" ? " lead " + h.seat : ""}`);
+    const mine = h.hs[view], theirs = h.hs[3 - view];
+    if (!mine || mine.length !== 7) return { error: `Hand ${h.n} needs an h${view}: line with seven tiles.` };
+    log.push(`hand ${mine.join(" ")}${theirs && theirs.length === 7 ? " opp " + theirs.join(" ") : ""}${h.kind === "lead" ? " lead " + h.seat : ""}`);
     h.moves.forEach((mv) => log.push(`move ${mv}`));
     if (/blocked/.test(h.end)) log.push("blocked");
     if (h.reveal && h.reveal.length) log.push(`reveal ${h.reveal.join(" ")}`);
@@ -1464,15 +1478,16 @@ document.addEventListener("click", (e) => {
     case "new": ui.choosingSeat = false; ui.dealing = true; ui.sel.clear(); ui.leader = 0; send(`new ${el.dataset.seat}`).then(() => { ui.dealing = true; render(); }); break;
     case "pick": {
       const t = el.dataset.tile;
-      if (S.phase === "handover" && (ui.dealing || S.handNumber === 0)) { ui.sel.has(t) ? ui.sel.delete(t) : ui.sel.size < 7 && ui.sel.add(t); render(); }
+      if (S.phase === "handover" && (ui.dealing || S.handNumber === 0)) { const set = ui.dealWho === "opp" ? ui.oppSel : ui.sel; set.has(t) ? set.delete(t) : set.size < 7 && set.add(t); render(); }
       else if (S.phase === "handover") { ui.sel.has(t) ? ui.sel.delete(t) : ui.sel.size < S.oppCount && ui.sel.add(t); render(); }
-      else if (ui.picker === "my-draw") send(`move d${t}`);
+      else if (ui.picker === "my-draw" || ui.picker === "opp-draw") send(`move d${t}`);
       else if (ui.picker === "opp-play") chooseTile(t, "opp");
       break;
     }
-    case "clear-sel": ui.sel.clear(); render(); break;
+    case "clear-sel": (ui.dealWho === "opp" ? ui.oppSel : ui.sel).clear(); render(); break;
+    case "deal-who": ui.dealWho = el.dataset.who; render(); break;
     case "leader": ui.leader = +el.dataset.seat; render(); break;
-    case "start-hand": send(`hand ${[...ui.sel].join(" ")}${S.jockey > 0 ? "" : " lead " + ui.leader}`); break;
+    case "start-hand": send(`hand ${[...ui.sel].join(" ")}${ui.oppSel.size === 7 ? " opp " + [...ui.oppSel].join(" ") : ""}${S.jockey > 0 ? "" : " lead " + ui.leader}`); break;
     case "deal": ui.dealing = true; ui.sel.clear(); ui.leader = 0; render(); break;
     case "cancel-deal": ui.dealing = false; render(); break;
     case "rack": chooseTile(el.dataset.tile, "me"); break;
@@ -1495,7 +1510,8 @@ document.addEventListener("click", (e) => {
     case "hints": ui.hints = !ui.hints; save(); analyze(); break;
     case "my-pass": send("move p"); break;
     case "opp-play": ui.picker = "opp-play"; ui.pending = null; render(); break;
-    case "opp-draw": send("move d"); break;
+    case "opp-draw": if (S.full) { ui.picker = "opp-draw"; ui.pending = null; render(); } else send("move d"); break;
+    case "opp-draw-unknown": send("move d"); break;
     case "opp-pass": send("move p"); break;
     case "blocked": send("blocked"); break;
     case "cancel": ui.picker = null; ui.pending = null; ui.error = ""; render(); break;

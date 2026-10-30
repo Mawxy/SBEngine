@@ -80,6 +80,15 @@ void Game::begin_hand() {
     phase_ = Phase::Play;
 }
 
+bool Game::set_next_draw(int t) {
+    for (int i = bone_pos_; i < bone_end_; ++i)
+        if (boneyard_[i] == t) {
+            std::swap(boneyard_[i], boneyard_[bone_pos_]);
+            return true;
+        }
+    return false;
+}
+
 TileMask Game::boneyard_mask() const {
     TileMask m = 0;
     for (int i = bone_pos_; i < bone_end_; ++i) m |= tile_bit(boneyard_[i]);

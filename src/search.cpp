@@ -53,6 +53,10 @@ uint64_t Searcher::hash(const Game& g) const {
                   static_cast<uint64_t>(g.bone_pos()) << 25 | static_cast<uint64_t>(g.pool(0)) << 32 |
                   static_cast<uint64_t>(g.pool(1)) << 40;
     const uint64_t k1 = static_cast<uint64_t>(g.hand(0)) | static_cast<uint64_t>(g.hand(1)) << 32;
+    // With a fixed draw order, the hands and the draw count pin down what is left in the
+    // boneyard. With chance draws they don't (different tiles can be drawn and played), so
+    // the boneyard's contents go into the key.
+    if (p_.chance_draws) return mix64(k1 ^ mix64(k2 ^ salt_ ^ mix64(static_cast<uint64_t>(g.boneyard_mask()) + 0x51)));
     return mix64(k1 ^ mix64(k2 ^ salt_));
 }
 
@@ -147,6 +151,21 @@ int Searcher::negamax(const Game& g, int depth, int alpha, int beta, int ply) {
 
     std::vector<Action>& moves = move_stack_[ply];
     g.legal_actions(moves);
+    if (p_.chance_draws && moves.size() == 1 && moves[0].kind == Action::Draw && g.boneyard_size() > 1 && chance_width() > 1) {
+        const bool saved = hit_horizon_;
+        hit_horizon_ = false;
+        const int v = chance_value(g, depth, ply);
+        if (stop_) return 0;
+        const bool horizon = hit_horizon_;
+        hit_horizon_ = saved || horizon;
+        e.key = key;
+        e.value = v;
+        e.depth = horizon ? static_cast<int8_t>(std::min(depth, 126)) : kSolvedDepth;
+        e.bound = 1;
+        e.tile = -1;
+        e.target = -1;
+        return v;
+    }
     order(g, moves, tt_tile, tt_target);
 
     const bool saved_horizon = hit_horizon_;
@@ -179,6 +198,37 @@ int Searcher::negamax(const Game& g, int depth, int alpha, int beta, int ply) {
     return best;
 }
 
+int Searcher::chance_value(const Game& g, int depth, int ply) {
+    int8_t tiles[kNumTiles];
+    int n = 0;
+    for (TileMask m = g.boneyard_mask(); m; m &= m - 1) tiles[n++] = static_cast<int8_t>(first_tile(m));
+    const int width = chance_width();
+    int k = n;
+    if (n > width) {
+        // A different, repeatable sample of the possible tiles at each position.
+        uint64_t h = mix64(hash(g) ^ 0xC4A3CEull);
+        for (int i = 0; i < width; ++i) {
+            h = mix64(h + i);
+            const int j = i + static_cast<int>(h % static_cast<uint64_t>(n - i));
+            std::swap(tiles[i], tiles[j]);
+        }
+        k = width;
+    }
+    const Action draw = Action::draw();
+    long long sum = 0;
+    ++chance_depth_;
+    for (int i = 0; i < k; ++i) {
+        Game c = g;
+        c.set_next_draw(tiles[i]);
+        c.apply(draw);
+        sum += child_value(g, c, draw, depth - 1, -kInf, kInf, ply);  // draws cost no depth there; this ply pays for it
+        if (stop_) break;
+    }
+    --chance_depth_;
+    if (stop_) return 0;
+    return static_cast<int>(sum / k);
+}
+
 void Searcher::root_values(const Game& g, const std::vector<Action>& acts, std::vector<int>& values) {
     salt_ = mix64(salt_ + 1);  // fresh TT generation for every position/determinization
     nodes_ = 0;
@@ -192,6 +242,10 @@ void Searcher::root_values(const Game& g, const std::vector<Action>& acts, std::
         hard_limit_ = d == 1 ? 0 : 4 * p_.nodes_per_det;  // depth 1 always completes
         hit_horizon_ = false;
         for (size_t i = 0; i < acts.size() && !stop_; ++i) {
+            if (p_.chance_draws && acts[i].kind == Action::Draw && g.boneyard_size() > 1 && chance_width() > 1) {
+                cur[i] = chance_value(g, d, 0);
+                continue;
+            }
             Game c = g;
             c.apply(acts[i]);
             cur[i] = child_value(g, c, acts[i], d, -kInf, kInf, 0);
@@ -524,7 +578,10 @@ double evaluate_position(const View& v, const SearchParams& p, SearchStats* stat
     return sum / D;
 }
 
-double evaluate_spectator(const Game& game, const SearchParams& p, SearchStats* stats, Outcome* outcome) {
+double evaluate_spectator(const Game& game, const SearchParams& p0, SearchStats* stats, Outcome* outcome) {
+    SearchParams p = p0;
+    p.chance_draws = true;  // both hands known; draws stay random picks from what remains
+    p.nodes_per_det = std::max<int64_t>(p0.nodes_per_det * 4, 60000);  // averaging over draws needs a bigger budget
     if (game.phase() != Phase::Play) fail("evaluate_spectator: not in play");
     const int D = p.determinizations;
     std::vector<double> val(D);
@@ -544,7 +601,10 @@ double evaluate_spectator(const Game& game, const SearchParams& p, SearchStats* 
     return sum / D;
 }
 
-std::vector<MoveEval> analyze_moves_spectator(const Game& game, const SearchParams& p, SearchStats* stats) {
+std::vector<MoveEval> analyze_moves_spectator(const Game& game, const SearchParams& p0, SearchStats* stats) {
+    SearchParams p = p0;
+    p.chance_draws = true;  // both hands known; draws stay random picks from what remains
+    p.nodes_per_det = std::max<int64_t>(p0.nodes_per_det * 4, 60000);  // averaging over draws needs a bigger budget
     if (game.phase() != Phase::Play) fail("analyze_moves_spectator: not in play");
     const std::vector<Action> root = game.legal_actions();
     const size_t n = root.size();
@@ -581,8 +641,11 @@ std::vector<MoveEval> analyze_moves_spectator(const Game& game, const SearchPara
     return out;
 }
 
-void evaluate_spectator_bid(const Game& game, const SearchParams& p, double& seat1_leads, double& seat2_leads,
+void evaluate_spectator_bid(const Game& game, const SearchParams& p0, double& seat1_leads, double& seat2_leads,
                             SearchStats* stats, Outcome* seat1_leads_outcome, Outcome* seat2_leads_outcome) {
+    SearchParams p = p0;
+    p.chance_draws = true;  // both hands known; draws stay random picks from what remains
+    p.nodes_per_det = std::max<int64_t>(p0.nodes_per_det * 4, 60000);  // averaging over draws needs a bigger budget
     const int D = p.determinizations;
     std::vector<double> a(D), b(D);
     std::vector<int8_t> oa(D), ob(D);

@@ -28,14 +28,16 @@ function haviPiece(p) {
   return { top: p.in, bottom: p.out, id: `${lo}-${hi}` };
 }
 
-// Our layout (center/spinner + arms in attachment order) -> HaviEngine boardState + boardEnds.
-// Arm 0 = left, 1 = right, 2 = up, 3 = down.
+// Our layout (center/spinner + arms, each with the direction it lies on the table) ->
+// HaviEngine boardState + boardEnds. Both describe the table as it physically lies.
 function haviBoard(L) {
   const bs = { spinner: null, spinnerReady: false, firstTile: null, leftArm: [], rightArm: [], upArm: [], downArm: [] };
   const ends = [null, null, null, null];
   if (!L.center && !L.spinner) return { bs, ends };
-  const arms = L.arms.map((a) => a.map(haviPiece));
-  bs.leftArm = arms[0] || []; bs.rightArm = arms[1] || []; bs.upArm = arms[2] || []; bs.downArm = arms[3] || [];
+  const dirs = L.dirs || ["L", "R", "U", "D"];
+  const byDir = { L: [], R: [], U: [], D: [] };
+  L.arms.forEach((a, i) => { byDir[dirs[i]] = a.map(haviPiece); });
+  bs.leftArm = byDir.L; bs.rightArm = byDir.R; bs.upArm = byDir.U; bs.downArm = byDir.D;
   const last = (a, dflt) => (a.length ? a[a.length - 1].bottom : dflt);
   if (L.spinner) {
     const v = +L.spinner[0];
@@ -46,9 +48,10 @@ function haviBoard(L) {
     if (bs.spinnerReady) { ends[2] = last(bs.upArm, v); ends[3] = last(bs.downArm, v); }
   } else {
     const hi = +L.center[0], lo = +L.center[1];
-    bs.firstTile = { top: hi, bottom: lo, id: `${lo}-${hi}` };
-    ends[0] = last(bs.leftArm, hi);
-    ends[1] = last(bs.rightArm, lo);
+    const left = L.flip ? lo : hi, right = L.flip ? hi : lo;
+    bs.firstTile = { top: left, bottom: right, id: `${lo}-${hi}` };
+    ends[0] = last(bs.leftArm, left);
+    ends[1] = last(bs.rightArm, right);
   }
   return { bs, ends };
 }
@@ -59,9 +62,7 @@ function haviToNotation(st, mv) {
   const code = `${Math.max(t.top, t.bottom)}${Math.min(t.top, t.bottom)}`;
   const L = st.layout;
   if (!L.center && !L.spinner) return code;
-  const idx = { left: 0, right: 1, up: 2, down: 3 }[mv.end] ?? 0;
-  const end = idx < L.arms.length ? L.ends.find((e) => e.arm === idx) : L.ends.find((e) => e.spinner);
-  return end ? code + end.code : code;
+  return code + "@" + ({ left: "L", right: "R", up: "U", down: "D" }[mv.end] || "L");
 }
 
 function haviRunSearch(H, state, limitMs, isBid) {

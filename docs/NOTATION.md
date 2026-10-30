@@ -3,7 +3,7 @@
 A short way to write down Spectacular Bid moves and games, modeled on chess notation. You can use it to keep score at the table, share a game, or enter moves into the engine.
 
 There are three parts:
-- **Moves**: how to write one action, like `64` or `41@4`.
+- **Moves**: how to write one action, like `64` or `41@R`.
 - **Game records** (`.sbg` files): a whole game, hand by hand.
 - **Position strings**: one line that describes a single position.
 
@@ -28,13 +28,28 @@ When you type moves into the engine, `6-4`, `46` and `[6-4]` are all accepted, a
 - Any later double is laid crosswise at the end of an arm. That end is called a **double end**, and it counts both pips.
 - The count is the sum of all open ends. A move scores when the count is a multiple of 5.
 
+## Directions
+Every arm of the layout is named by the way it points **from the recording player's seat** (the `View` seat, which is the bottom of the app's board):
+
+| Letter | Arm |
+|---|---|
+| `L` | left |
+| `R` | right |
+| `U` | up (away from you) |
+| `D` | down (toward you) |
+| `S` | the spinner's next open side |
+
+- A line has a left end and a right end.
+- When the first double lands on an end of the line, it becomes the spinner right there. The line stays where it is, so it is now the spinner's arm on the other side (a double played on the right end leaves the line as the spinner's left arm).
+- The spinner's long sides (`L`, `R`) fill before its short ends (`U`, `D`).
+- An arm keeps its letter for the rest of the hand, however many tiles it grows by, and a double laid across its end doesn't change it.
+
 ## Moves
 | Action | Notation | Example |
 |---|---|---|
-| Lead the first tile | `<tile>` | `55` |
-| Play on an open end showing n | `<tile>@n` | `41@4` |
-| Play on the spinner | `<tile>@s` | `53@s` |
-| Play on a double end showing n | `<tile>@nd` | `61@6d` |
+| Lead the first tile, written as it lies (left pip first) | `<tile>` | `64` (6 on the left), `46` (4 on the left), `55` |
+| Play on an arm | `<tile>@<L, R, U or D>` | `41@R` |
+| Start a new arm off the spinner | `<tile>@<side>` or `<tile>@S` | `53@U`, `53@S` |
 | Draw a tile you can't see (opponent's draw) | `d` | `d` |
 | Draw a tile you can see (your own draw) | `d<tile>` | `d32` |
 | Pass (can't play, boneyard empty) | `p` | `p` |
@@ -43,12 +58,13 @@ When you type moves into the engine, `6-4`, `46` and `[6-4]` are all accepted, a
 | Accept the current bid | `a` | `a` |
 
 ### Choosing the end
-- `@n` names the end showing n. If no plain end shows n, it means the spinner. If the spinner doesn't show n either, it means a double end showing n.
-- Use `@s` or `@nd` only when two ends show the same number and you need to say which one.
 - If a tile fits only one place, you can leave the end off: `64` is enough.
+- Typing, you can drop the `@`: `64r` is the same as `64@R`, and `53s` the same as `53@S`. Records write the `@` form.
+- `@S` takes the spinner's next open side: left or right while either is free, then up, then down. The engine writes the side itself (`@L`, `@R`, `@U`, `@D`) in records.
+- Older records used the number showing on the end (`41@4`, spinner `53@s`, double end `61@6d`). The engine still reads them and writes them back with letters.
 
 ### Score annotation
-After a move you can add the points it scored, such as `64 +10` or `53@s +15`. Points are the board count, and every 5 points is 1 chip. The engine ignores the annotation when it reads a move, and it adds annotations when it writes a record.
+After a move you can add the points it scored, such as `64 +10` or `53@U +15`. Points are the board count, and every 5 points is 1 chip. The engine ignores the annotation when it reads a move, and it adds annotations when it writes a record.
 
 ## Bidding
 After a hand ends in a domino, the player who went out becomes the **jockey**. Players bid chips for the right to lead the next hand.
@@ -83,7 +99,7 @@ A record has a few header lines, then one block per hand.
 
 #1 lead 1
 h1: 55 53 64 41 30 20 10
-55 +10 52@s 53@s +5 d d 21@2 ...
+55 +10 52@L 53@R +5 d d 21@L ...
 end domino 1
 r2: 41 52
 
@@ -108,11 +124,12 @@ end blocked
 |---|---|
 | `#n lead s` | Hand n, no auction. Seat s holds the forced lead. |
 | `#n jockey s` | Hand n starts with an auction. Seat s is the jockey. |
-| `h1:` / `h2:` | That seat's seven starting tiles. Leave out a hand you never saw. |
+| `h1:` / `h2:` | That seat's seven starting tiles. Leave out a hand you never saw. With both hands (and every draw written with its tile, `d52`), the engine follows the whole game: an all-tiles-visible read, grades for both players, and automatic settling. |
 | moves | Every action in order, separated by spaces. Draws you couldn't see are `d`. |
 | `end domino s` | Seat s went out. |
 | `end blocked` | Nobody could play and the boneyard was empty. |
 | `r1:` / `r2:` | Tiles that seat revealed at the end of the hand, for scoring. |
+| `score a-b, won x-y` | Written by the engine after each hand: chips left in Seat 1's and Seat 2's pools, then the chips each seat won during the hand (bids included). Ignored when a record is read. |
 
 If the game ends during a hand, the end line says so: `end domino 1; game over, seat 1 wins`.
 
@@ -132,7 +149,7 @@ Example: `P2 27/30 1 [6]2,5 64.31.20.11 6 9`
 | phase and to-move | `P1` or `P2` during play. `B1` or `B2` during an auction, with the current bid added, as in `B2:3`. |
 | pools | Chips left in each seat's pool. |
 | jockey | `1`, `2`, or `-` for none. |
-| layout | `-` if empty. `<6,4>` is a line with ends 6 and 4 before any double. `[5]3,2` is spinner 5 with arm ends 3 and 2. A `d` marks a double end, as in `6d`. |
+| layout | `-` if empty. `<6,4>` is a line with ends 6 and 4 before any double. `[5]3,2` is spinner 5 with arm ends 3 and 2. Ends are listed left, right, up, down. A `d` marks a double end, as in `6d`. |
 | hand1, hand2 | The tiles, joined with `.`, or just a count if the hand is hidden. |
 | boneyard | Number of tiles left in the boneyard. |
 
